@@ -17,6 +17,7 @@ body {
 
 button,
 input,
+select,
 summary { font: inherit; }
 
 .page {
@@ -33,16 +34,12 @@ summary { font: inherit; }
 }
 
 .logo {
-  display: grid;
-  place-items: center;
   width: 52px;
   height: 52px;
   flex: 0 0 52px;
   border-radius: 16px;
-  background: #0c66e4;
-  color: #fff;
-  box-shadow: 0 10px 28px rgba(12, 102, 228, 0.25);
-  font-weight: 800;
+  box-shadow: 0 10px 28px rgba(9, 30, 66, 0.18);
+  object-fit: cover;
 }
 
 .eyebrow {
@@ -142,7 +139,8 @@ form {
 input[type="text"],
 input[type="password"],
 input[type="number"],
-input[type="url"] {
+input[type="url"],
+select {
   width: 100%;
   min-height: 44px;
   padding: 10px 12px;
@@ -154,7 +152,8 @@ input[type="url"] {
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
-input:focus {
+input:focus,
+select:focus {
   border-color: #0c66e4;
   box-shadow: 0 0 0 3px rgba(12, 102, 228, 0.15);
 }
@@ -235,6 +234,46 @@ code {
   background: #dcfff1;
   color: #216e4e;
 }
+
+
+.worklog-card {
+  overflow: hidden;
+  border: 1px solid #b8d5ff;
+  border-radius: 14px;
+  background: #f8fbff;
+}
+
+.worklog-card .choice-card {
+  border: 0;
+  border-radius: 0;
+}
+
+.worklog-options {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  border-top: 1px solid #b8d5ff;
+}
+
+.worklog-variable-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.pending-worklogs {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: #fff7d6;
+  color: #7f5f01;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.hidden { display: none !important; }
 
 .preview {
   display: flex;

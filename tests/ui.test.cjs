@@ -111,3 +111,92 @@ test("extension HTML loads only local executable scripts", () => {
     assert.doesNotMatch(html, /<script\b(?![^>]*\bsrc=)[^>]*>/i);
   }
 });
+
+test("settings expose optional Jira Work Log synchronization controls", () => {
+  const html = read("options.html");
+  const script = read("options.js");
+
+  assert.match(html, /id="sync-worklogs"/);
+  assert.match(html, /id="worklog-sync-mode"/);
+  assert.match(html, /value="automatic"/);
+  assert.match(html, /value="manual"/);
+  assert.match(html, /id="worklog-rounding"/);
+  assert.match(html, /value="exact"/);
+  assert.match(html, /value="nearest-minute"/);
+  assert.match(html, /value="ceil-minute"/);
+  assert.match(html, /data-worklog-variable="\{description\}"/);
+  assert.match(html, /data-worklog-variable="\{issueKey\}"/);
+  assert.match(html, /data-worklog-variable="\{togglId\}"/);
+  assert.match(script, /syncWorklogs: syncWorklogsInput\.checked/);
+  assert.match(script, /worklogSyncMode: worklogSyncModeInput\.value/);
+});
+
+test("popup exposes a local pending Work Log retry workflow", () => {
+  const html = read("popup.html");
+  const script = read("popup.js");
+
+  assert.match(html, /id="worklogs"/);
+  assert.match(html, /id="worklogs-list"/);
+  assert.match(html, /id="sync-worklogs"/);
+  assert.match(script, /type: "SYNC_PENDING_WORKLOGS"/);
+  assert.match(script, /Work Logs apply only to timers started from the Jira button/);
+});
+
+test("Work Log data use is disclosed before settings are saved", () => {
+  const html = read("options.html");
+  const disclosureIndex = html.indexOf('id="data-use-title"');
+  const saveIndex = html.indexOf('id="save-button"');
+
+  assert.ok(disclosureIndex >= 0);
+  assert.ok(saveIndex > disclosureIndex);
+  assert.match(html, /If Work Log sync is enabled/i);
+  assert.match(html, /stopped duration, start time/i);
+  assert.match(html, /Retry records stay in\s+this Chrome profile/i);
+});
+
+test("all extension HTML ids are unique", () => {
+  for (const filename of ["options.html", "popup.html"]) {
+    const html = read(filename);
+    const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+    assert.equal(new Set(ids).size, ids.length, `${filename} contains duplicate ids`);
+  }
+});
+
+test("the replacement extension icons are valid PNGs at every manifest size", () => {
+  const manifest = JSON.parse(read("manifest.json"));
+  const expectedSizes = [16, 32, 48, 128];
+
+  for (const size of expectedSizes) {
+    const relativePath = manifest.icons[String(size)];
+    assert.equal(relativePath, `icons/icon${size}.png`);
+    const buffer = fs.readFileSync(path.join(ROOT, relativePath));
+    assert.equal(buffer.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+    assert.equal(buffer.readUInt32BE(16), size);
+    assert.equal(buffer.readUInt32BE(20), size);
+  }
+
+  assert.match(read("options.html"), /src="icons\/icon48\.png"/);
+  assert.match(read("popup.html"), /src="icons\/icon32\.png"/);
+});
+
+test("release metadata is set to version 0.4.0", () => {
+  const manifest = JSON.parse(read("manifest.json"));
+  const packageJson = JSON.parse(read("package.json"));
+  assert.equal(manifest.version, "0.4.0");
+  assert.equal(packageJson.version, "0.4.0");
+  assert.match(manifest.description, /Jira Work Logs/);
+});
+
+test("extension stylesheets have balanced blocks and one Work Log settings block", () => {
+  for (const filename of ["options.css", "popup.css"]) {
+    const css = read(filename);
+    assert.equal(
+      [...css].filter((character) => character === "{").length,
+      [...css].filter((character) => character === "}").length,
+      `${filename} contains unbalanced braces`
+    );
+  }
+
+  const optionsCss = read("options.css");
+  assert.equal((optionsCss.match(/\.worklog-card\s*\{/g) || []).length, 1);
+});

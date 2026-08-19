@@ -1,9 +1,15 @@
 "use strict";
 
 const STORAGE_KEY = "jiraTogglSettings";
+const WORKLOG_STATE_KEY = "jiraTogglWorklogState";
 const DYNAMIC_CONTENT_SCRIPT_ID = "jira-toggl-quick-start-content";
 const TOGGL_API_BASE_URL = "https://api.track.toggl.com";
 const CREATED_WITH = "jira-toggl-quickstart-chrome";
+const WORKLOG_PROPERTY_KEY = "jira-toggl-quickstart";
+const WORKLOG_STATE_VERSION = 1;
+const MAX_WORKLOG_RECORDS = 200;
+const WORKLOG_RECONCILE_LIMIT = 5;
+const WORKLOG_API_VERSIONS = Object.freeze(["3", "2", "latest"]);
 
 const ISSUE_TEMPLATE_VARIABLES = Object.freeze([
   "key",
@@ -22,6 +28,12 @@ const ISSUE_TEMPLATE_VARIABLES = Object.freeze([
   "components"
 ]);
 const ISSUE_TEMPLATE_VARIABLE_SET = new Set(ISSUE_TEMPLATE_VARIABLES);
+const WORKLOG_COMMENT_VARIABLES = Object.freeze([
+  "description",
+  "issueKey",
+  "togglId"
+]);
+const WORKLOG_COMMENT_VARIABLE_SET = new Set(WORKLOG_COMMENT_VARIABLES);
 
 const DEFAULT_SETTINGS = Object.freeze({
   apiToken: "",
@@ -33,8 +45,14 @@ const DEFAULT_SETTINGS = Object.freeze({
   projectName: "",
   billable: false,
   descriptionTemplate: "[{key}] {summary}",
-  stopExisting: true
+  stopExisting: true,
+  syncWorklogs: false,
+  worklogSyncMode: "automatic",
+  worklogRounding: "exact",
+  worklogCommentTemplate: "Synced from Toggl: {description}"
 });
+
+const worklogSyncLocks = new Map();
 
 class UserFacingError extends Error {
   constructor(code, message) {
@@ -119,6 +137,10 @@ async function handleMessage(message, sender) {
     case "STOP_CURRENT_TIMER":
       assertExtensionPageSender(sender);
       return stopCurrentTimer();
+
+    case "SYNC_PENDING_WORKLOGS":
+      assertExtensionPageSender(sender);
+      return syncPendingWorklogs();
 
     case "GET_OPTIONS_STATE":
       assertExtensionPageSender(sender);
@@ -216,7 +238,13 @@ async function getSettings() {
     jiraOrigin,
     projectName: String(savedSettings.projectName || ""),
     billable: savedSettings.billable === true,
-    stopExisting: savedSettings.stopExisting !== false
+    stopExisting: savedSettings.stopExisting !== false,
+    syncWorklogs: savedSettings.syncWorklogs === true,
+    worklogSyncMode: coerceWorklogSyncMode(savedSettings.worklogSyncMode),
+    worklogRounding: coerceWorklogRounding(savedSettings.worklogRounding),
+    worklogCommentTemplate: coerceWorklogCommentTemplate(
+      savedSettings.worklogCommentTemplate
+    )
   };
 }
 
@@ -238,7 +266,11 @@ function toPublicSettings(settings, jiraPermissionGranted = false) {
     projectName: settings.projectName || "",
     billable: settings.billable === true,
     descriptionTemplate: settings.descriptionTemplate,
-    stopExisting: settings.stopExisting !== false
+    stopExisting: settings.stopExisting !== false,
+    syncWorklogs: settings.syncWorklogs === true,
+    worklogSyncMode: settings.worklogSyncMode,
+    worklogRounding: settings.worklogRounding,
+    worklogCommentTemplate: settings.worklogCommentTemplate
   };
 }
 
@@ -248,7 +280,13 @@ async function getPublicSettings(settings) {
 }
 
 async function getOptionsState() {
-  return getPublicSettings(await getSettings());
+  const settings = await getSettings();
+  const publicSettings = await getPublicSettings(settings);
+  const worklogs = await getWorklogSummary(settings);
+  return {
+    ...publicSettings,
+    pendingWorklogCount: worklogs.pendingCount
+  };
 }
 
 async function validateAndSaveSettings(input) {
@@ -276,6 +314,12 @@ async function validateAndSaveSettings(input) {
   const descriptionTemplate = normalizeTemplate(candidate.descriptionTemplate);
   const billable = candidate.billable === true;
   const stopExisting = candidate.stopExisting !== false;
+  const syncWorklogs = candidate.syncWorklogs === true;
+  const worklogSyncMode = normalizeWorklogSyncMode(candidate.worklogSyncMode);
+  const worklogRounding = normalizeWorklogRounding(candidate.worklogRounding);
+  const worklogCommentTemplate = normalizeWorklogCommentTemplate(
+    candidate.worklogCommentTemplate
+  );
 
   const me = await togglRequest("/api/v9/me", { apiToken });
   const workspaceId =
@@ -310,7 +354,11 @@ async function validateAndSaveSettings(input) {
     projectName,
     billable,
     descriptionTemplate,
-    stopExisting
+    stopExisting,
+    syncWorklogs,
+    worklogSyncMode,
+    worklogRounding,
+    worklogCommentTemplate
   };
 
   try {
@@ -325,6 +373,7 @@ async function validateAndSaveSettings(input) {
   await chrome.storage.local.set({ [STORAGE_KEY]: settings });
 
   if (existing.jiraOrigin && existing.jiraOrigin !== jiraOrigin) {
+    await clearWorklogState();
     await removeJiraHostPermission(existing.jiraOrigin);
   }
 
@@ -335,7 +384,7 @@ async function clearSettings() {
   const existing = await getSettings();
 
   await unregisterJiraContentScript().catch(() => undefined);
-  await chrome.storage.local.remove(STORAGE_KEY);
+  await chrome.storage.local.remove([STORAGE_KEY, WORKLOG_STATE_KEY]);
 
   if (existing.jiraOrigin) {
     await removeJiraHostPermission(existing.jiraOrigin);
@@ -349,13 +398,20 @@ async function getPopupState() {
   const publicSettings = await getPublicSettings(settings);
 
   if (!publicSettings.togglConfigured) {
-    return { settings: publicSettings, current: null };
+    return {
+      settings: publicSettings,
+      current: null,
+      worklogs: await getWorklogSummary(settings)
+    };
   }
 
   const current = await getCurrentTimeEntry(settings.apiToken);
+  await reconcileStoppedTrackedTimers(settings, current?.id).catch(() => undefined);
+
   return {
     settings: publicSettings,
-    current: sanitizeEntry(current)
+    current: sanitizeEntry(current),
+    worklogs: await getWorklogSummary(settings)
   };
 }
 
@@ -385,29 +441,35 @@ async function startTimer(issueInput) {
   const issue = normalizeIssue(issueInput);
   const settings = await getConfiguredTogglSettings();
   const description = formatDescription(settings.descriptionTemplate, issue);
-  return startDescriptionTimer(description, settings);
+  return startDescriptionTimer(description, settings, issue);
 }
 
 async function startManualTimer(descriptionInput) {
   const settings = await getConfiguredTogglSettings();
   const description = normalizeManualDescription(descriptionInput);
-  return startDescriptionTimer(description, settings);
+  return startDescriptionTimer(description, settings, null);
 }
 
-async function startDescriptionTimer(description, settings) {
+async function startDescriptionTimer(description, settings, issue = null) {
   const current = await getCurrentTimeEntry(settings.apiToken);
 
   if (current && descriptionsMatch(current.description, description)) {
+    const entry = sanitizeEntry(current);
+    if (issue && entry) {
+      await trackJiraTimer(entry, issue, description, settings);
+    }
+
     return {
       action: "already-running",
       description,
       stoppedPrevious: false,
       billable: current.billable === true,
-      entry: sanitizeEntry(current)
+      entry
     };
   }
 
   let stoppedPrevious = false;
+  let previousWorklogSync = null;
   if (current) {
     if (!settings.stopExisting) {
       throw new UserFacingError(
@@ -416,8 +478,9 @@ async function startDescriptionTimer(description, settings) {
       );
     }
 
-    await stopTimeEntry(current, settings.apiToken);
+    const stopped = await stopTrackedTimeEntry(current, settings);
     stoppedPrevious = true;
+    previousWorklogSync = stopped.worklogSync;
   }
 
   const body = {
@@ -446,10 +509,15 @@ async function startDescriptionTimer(description, settings) {
   const entry = sanitizeEntry(created) ||
     sanitizeEntry(await getCurrentTimeEntry(settings.apiToken));
 
+  if (issue && entry) {
+    await trackJiraTimer(entry, issue, description, settings);
+  }
+
   return {
     action: "started",
     description,
     stoppedPrevious,
+    previousWorklogSync,
     billable: body.billable,
     entry
   };
@@ -472,10 +540,12 @@ async function stopTimerForIssue(issueInput) {
     );
   }
 
-  await stopTimeEntry(current, settings.apiToken);
+  const stopped = await stopTrackedTimeEntry(current, settings, issue);
   return {
     action: "stopped",
-    description
+    description,
+    entry: stopped.entry,
+    worklogSync: stopped.worklogSync
   };
 }
 
@@ -484,11 +554,19 @@ async function stopCurrentTimer() {
   const current = await getCurrentTimeEntry(settings.apiToken);
 
   if (!current) {
-    return { action: "nothing-running" };
+    return {
+      action: "nothing-running",
+      worklogs: await getWorklogSummary(settings)
+    };
   }
 
-  await stopTimeEntry(current, settings.apiToken);
-  return { action: "stopped" };
+  const stopped = await stopTrackedTimeEntry(current, settings);
+  return {
+    action: "stopped",
+    entry: stopped.entry,
+    worklogSync: stopped.worklogSync,
+    worklogs: await getWorklogSummary(settings)
+  };
 }
 
 async function getConfiguredTogglSettings() {
@@ -538,6 +616,679 @@ async function stopTimeEntry(entry, apiToken) {
       apiToken
     }
   );
+}
+
+async function trackJiraTimer(entry, issue, description, settings) {
+  const togglEntryId = normalizeOptionalPositiveInteger(entry?.id, "Time entry ID");
+  if (!togglEntryId) {
+    return;
+  }
+
+  const normalizedIssue = normalizeIssue(issue);
+  const now = new Date().toISOString();
+  const state = await getWorklogState();
+  const existing = state.entries[String(togglEntryId)] || {};
+
+  state.entries[String(togglEntryId)] = {
+    togglEntryId,
+    workspaceId: entry.workspaceId || settings.workspaceId,
+    jiraOrigin: settings.jiraOrigin,
+    issueKey: normalizedIssue.key,
+    description,
+    started: entry.start || existing.started || now,
+    stopped: null,
+    durationSeconds: null,
+    status: "running",
+    worklogId: null,
+    lastError: "",
+    createdAt: existing.createdAt || now,
+    updatedAt: now
+  };
+
+  await saveWorklogState(state);
+}
+
+async function stopTrackedTimeEntry(current, settings, fallbackIssue = null) {
+  const stoppedResponse = await stopTimeEntry(current, settings.apiToken);
+  let stoppedEntry = mergeTimeEntries(current, stoppedResponse);
+
+  if (!hasCompletedDuration(stoppedEntry)) {
+    const refreshed = await getTimeEntryById(current.id, settings.apiToken).catch(() => null);
+    if (refreshed) {
+      stoppedEntry = mergeTimeEntries(stoppedEntry, refreshed);
+    }
+  }
+
+  const worklogSync = await finalizeTrackedTimer(
+    stoppedEntry,
+    settings,
+    fallbackIssue
+  );
+
+  return {
+    entry: sanitizeEntry(stoppedEntry),
+    worklogSync
+  };
+}
+
+async function finalizeTrackedTimer(entry, settings, fallbackIssue = null) {
+  const togglEntryId = normalizeOptionalPositiveInteger(entry?.id, "Time entry ID");
+  if (!togglEntryId) {
+    return { status: "not-applicable" };
+  }
+
+  const state = await getWorklogState();
+  let record = state.entries[String(togglEntryId)] || null;
+
+  if (!record && fallbackIssue) {
+    const issue = normalizeIssue(fallbackIssue);
+    const now = new Date().toISOString();
+    record = {
+      togglEntryId,
+      workspaceId: Number(entry.workspace_id || entry.wid || settings.workspaceId) || null,
+      jiraOrigin: settings.jiraOrigin,
+      issueKey: issue.key,
+      description: String(entry.description || formatDescription(settings.descriptionTemplate, issue)),
+      started: entry.start || now,
+      stopped: null,
+      durationSeconds: null,
+      status: "running",
+      worklogId: null,
+      lastError: "",
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  if (!record) {
+    return { status: "not-applicable" };
+  }
+
+  const durationSeconds = calculateTimeEntryDuration(entry);
+  const now = new Date().toISOString();
+  record = {
+    ...record,
+    workspaceId: Number(entry.workspace_id || entry.wid || record.workspaceId || 0) || null,
+    description: String(entry.description || record.description || ""),
+    started: entry.start || record.started,
+    stopped: entry.stop || record.stopped || now,
+    durationSeconds,
+    status: "pending",
+    lastError: "",
+    updatedAt: now
+  };
+  state.entries[String(togglEntryId)] = record;
+
+  if (!settings.syncWorklogs) {
+    delete state.entries[String(togglEntryId)];
+    await saveWorklogState(state);
+    return {
+      status: "disabled",
+      issueKey: record.issueKey,
+      durationSeconds
+    };
+  }
+
+  await saveWorklogState(state);
+
+  if (settings.worklogSyncMode === "manual") {
+    return {
+      status: "queued",
+      reason: "confirmation",
+      issueKey: record.issueKey,
+      durationSeconds
+    };
+  }
+
+  return syncTrackedWorklog(togglEntryId, settings);
+}
+
+async function syncPendingWorklogs() {
+  const settings = await getConfiguredTogglSettings();
+  await reconcileStoppedTrackedTimers(settings, null).catch(() => undefined);
+
+  const state = await getWorklogState();
+  const pendingIds = Object.values(state.entries)
+    .filter((record) =>
+      record?.status === "pending" &&
+      record.jiraOrigin === settings.jiraOrigin
+    )
+    .sort((first, second) => String(first.createdAt).localeCompare(String(second.createdAt)))
+    .map((record) => record.togglEntryId);
+
+  let synced = 0;
+  let failed = 0;
+  const results = [];
+
+  for (const togglEntryId of pendingIds) {
+    const result = await syncTrackedWorklog(togglEntryId, settings, { force: true });
+    results.push(result);
+    if (result.status === "synced") {
+      synced += 1;
+    } else if (result.status === "queued") {
+      failed += 1;
+    }
+  }
+
+  return {
+    synced,
+    failed,
+    results,
+    worklogs: await getWorklogSummary(settings)
+  };
+}
+
+async function syncTrackedWorklog(togglEntryIdInput, settings, { force = false } = {}) {
+  const togglEntryId = normalizeOptionalPositiveInteger(
+    togglEntryIdInput,
+    "Time entry ID"
+  );
+
+  if (!togglEntryId) {
+    return { status: "not-applicable" };
+  }
+
+  const lockKey = String(togglEntryId);
+  if (worklogSyncLocks.has(lockKey)) {
+    return worklogSyncLocks.get(lockKey);
+  }
+
+  const promise = syncTrackedWorklogUnlocked(togglEntryId, settings, { force })
+    .finally(() => worklogSyncLocks.delete(lockKey));
+  worklogSyncLocks.set(lockKey, promise);
+  return promise;
+}
+
+async function syncTrackedWorklogUnlocked(togglEntryId, settings, { force }) {
+  const state = await getWorklogState();
+  let record = state.entries[String(togglEntryId)] || null;
+
+  if (!record) {
+    return { status: "not-applicable" };
+  }
+
+  if (record.status === "synced" && record.worklogId) {
+    return worklogResultFromRecord(record, { existing: true });
+  }
+
+  if (record.jiraOrigin !== settings.jiraOrigin) {
+    record.status = "pending";
+    record.lastError = "The configured Jira site changed before this Work Log was synced.";
+    record.updatedAt = new Date().toISOString();
+    state.entries[String(togglEntryId)] = record;
+    await saveWorklogState(state);
+    return worklogQueuedResult(record, "error");
+  }
+
+  if (!force && (!settings.syncWorklogs || settings.worklogSyncMode === "manual")) {
+    record.status = "pending";
+    record.updatedAt = new Date().toISOString();
+    state.entries[String(togglEntryId)] = record;
+    await saveWorklogState(state);
+    return worklogQueuedResult(record, "confirmation");
+  }
+
+  try {
+    if (!record.durationSeconds || !record.stopped) {
+      const refreshed = await getTimeEntryById(togglEntryId, settings.apiToken);
+      if (refreshed) {
+        record = {
+          ...record,
+          description: String(refreshed.description || record.description || ""),
+          started: refreshed.start || record.started,
+          stopped: refreshed.stop || record.stopped,
+          durationSeconds: calculateTimeEntryDuration(refreshed),
+          updatedAt: new Date().toISOString()
+        };
+      }
+    }
+
+    if (!record.durationSeconds || record.durationSeconds < 1) {
+      throw new UserFacingError(
+        "INVALID_WORKLOG_DURATION",
+        "The stopped Toggl entry does not have a valid duration yet."
+      );
+    }
+
+    const existing = await findExistingJiraWorklog(record, settings);
+    let worklog = existing;
+
+    if (!worklog) {
+      worklog = await createJiraWorklog(record, settings);
+    }
+
+    record.status = "synced";
+    record.worklogId = String(worklog?.id || record.worklogId || "");
+    record.lastError = "";
+    record.updatedAt = new Date().toISOString();
+    state.entries[String(togglEntryId)] = record;
+    await saveWorklogState(state);
+
+    return worklogResultFromRecord(record, { existing: Boolean(existing) });
+  } catch (error) {
+    record.status = "pending";
+    record.lastError = error instanceof Error
+      ? error.message
+      : "The Jira Work Log could not be created.";
+    record.updatedAt = new Date().toISOString();
+    state.entries[String(togglEntryId)] = record;
+    await saveWorklogState(state);
+    return worklogQueuedResult(record, "error");
+  }
+}
+
+async function reconcileStoppedTrackedTimers(settings, currentEntryId = null) {
+  if (!settings.apiToken || !settings.jiraOrigin) {
+    return;
+  }
+
+  const currentId = Number(currentEntryId || 0) || null;
+  const state = await getWorklogState();
+  const runningRecords = Object.values(state.entries)
+    .filter((record) =>
+      record?.status === "running" &&
+      record.jiraOrigin === settings.jiraOrigin &&
+      record.togglEntryId !== currentId
+    )
+    .sort((first, second) => String(first.createdAt).localeCompare(String(second.createdAt)))
+    .slice(0, WORKLOG_RECONCILE_LIMIT);
+
+  for (const record of runningRecords) {
+    try {
+      const entry = await getTimeEntryById(record.togglEntryId, settings.apiToken);
+      if (entry && hasCompletedDuration(entry)) {
+        await finalizeTrackedTimer(entry, settings);
+      }
+    } catch {
+      // The pending record remains available for a later popup refresh or manual retry.
+    }
+  }
+}
+
+async function getWorklogSummary(settings) {
+  const state = await getWorklogState();
+  const records = Object.values(state.entries)
+    .filter((record) => !settings?.jiraOrigin || record.jiraOrigin === settings.jiraOrigin);
+  const pending = records
+    .filter((record) => record.status === "pending")
+    .sort((first, second) => String(second.updatedAt).localeCompare(String(first.updatedAt)));
+
+  return {
+    enabled: settings?.syncWorklogs === true,
+    mode: settings?.worklogSyncMode || DEFAULT_SETTINGS.worklogSyncMode,
+    pendingCount: pending.length,
+    runningCount: records.filter((record) => record.status === "running").length,
+    pending: pending.slice(0, 5).map((record) => ({
+      togglEntryId: record.togglEntryId,
+      issueKey: record.issueKey,
+      description: record.description,
+      durationSeconds: record.durationSeconds,
+      lastError: record.lastError,
+      needsConfirmation: !record.lastError
+    }))
+  };
+}
+
+async function getWorklogState() {
+  const stored = await chrome.storage.local.get(WORKLOG_STATE_KEY);
+  const saved = stored[WORKLOG_STATE_KEY];
+  const entries = saved && typeof saved.entries === "object" && saved.entries
+    ? saved.entries
+    : {};
+
+  return {
+    version: WORKLOG_STATE_VERSION,
+    entries: { ...entries }
+  };
+}
+
+async function saveWorklogState(state) {
+  const entries = Object.values(state?.entries || {})
+    .filter((record) => record && Number(record.togglEntryId) > 0)
+    .sort((first, second) => String(second.updatedAt).localeCompare(String(first.updatedAt)));
+
+  const protectedRecords = entries.filter((record) => record.status !== "synced");
+  const syncedRecords = entries.filter((record) => record.status === "synced");
+  const keep = [...protectedRecords, ...syncedRecords]
+    .slice(0, Math.max(MAX_WORKLOG_RECORDS, protectedRecords.length));
+  const normalizedEntries = Object.fromEntries(
+    keep.map((record) => [String(record.togglEntryId), record])
+  );
+
+  await chrome.storage.local.set({
+    [WORKLOG_STATE_KEY]: {
+      version: WORKLOG_STATE_VERSION,
+      entries: normalizedEntries
+    }
+  });
+}
+
+async function clearWorklogState() {
+  await chrome.storage.local.remove(WORKLOG_STATE_KEY);
+}
+
+async function findExistingJiraWorklog(record, settings) {
+  let startAt = 0;
+  const maxResults = 1000;
+
+  for (let page = 0; page < 20; page += 1) {
+    const result = await jiraRequestWithFallback(settings, (apiVersion) => ({
+      path: `/rest/api/${apiVersion}/issue/${encodeURIComponent(record.issueKey)}/worklog?startAt=${startAt}&maxResults=${maxResults}&expand=properties`
+    }));
+    const worklogs = Array.isArray(result.payload?.worklogs)
+      ? result.payload.worklogs
+      : [];
+    const existing = worklogs.find((worklog) =>
+      worklogHasTogglEntryId(worklog, record.togglEntryId)
+    );
+
+    if (existing) {
+      return existing;
+    }
+
+    const total = Number(result.payload?.total || worklogs.length);
+    startAt += worklogs.length;
+    if (worklogs.length === 0 || startAt >= total) {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+async function createJiraWorklog(record, settings) {
+  const timeSpentSeconds = applyWorklogRounding(
+    record.durationSeconds,
+    settings.worklogRounding
+  );
+  const comment = formatWorklogComment(settings.worklogCommentTemplate, record);
+  const property = {
+    key: WORKLOG_PROPERTY_KEY,
+    value: {
+      schemaVersion: WORKLOG_STATE_VERSION,
+      togglTimeEntryId: record.togglEntryId,
+      togglWorkspaceId: record.workspaceId,
+      source: CREATED_WITH
+    }
+  };
+
+  const result = await jiraRequestWithFallback(settings, (apiVersion) => {
+    const body = {
+      timeSpentSeconds,
+      started: formatJiraStarted(record.started),
+      properties: [property]
+    };
+
+    if (comment) {
+      body.comment = apiVersion === "3"
+        ? toAtlassianDocument(comment)
+        : comment;
+    }
+
+    return {
+      method: "POST",
+      path: `/rest/api/${apiVersion}/issue/${encodeURIComponent(record.issueKey)}/worklog?adjustEstimate=leave&notifyUsers=false`,
+      body
+    };
+  });
+
+  return result.payload;
+}
+
+async function jiraRequestWithFallback(settings, requestFactory) {
+  let lastError = null;
+
+  for (let index = 0; index < WORKLOG_API_VERSIONS.length; index += 1) {
+    const apiVersion = WORKLOG_API_VERSIONS[index];
+    const request = requestFactory(apiVersion);
+    const result = await jiraRequest(settings, request).catch((error) => ({ error }));
+
+    if (!result.error) {
+      return { ...result, apiVersion };
+    }
+
+    lastError = result.error;
+    const canFallback =
+      result.error?.status &&
+      [404, 405].includes(result.error.status) &&
+      index < WORKLOG_API_VERSIONS.length - 1;
+
+    if (!canFallback) {
+      throw result.error;
+    }
+  }
+
+  throw lastError || new UserFacingError(
+    "JIRA_WORKLOG_ERROR",
+    "Jira did not accept the Work Log request."
+  );
+}
+
+async function jiraRequest(settings, request = {}) {
+  const { method = "GET", path, body } = request;
+  const url = new URL(path, settings.jiraOrigin);
+  let response;
+
+  try {
+    response = await fetch(url, {
+      method,
+      credentials: "include",
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+        ...(body ? { "Content-Type": "application/json" } : {})
+      },
+      ...(body ? { body: JSON.stringify(body) } : {})
+    });
+  } catch {
+    throw new UserFacingError(
+      "JIRA_NETWORK_ERROR",
+      "Could not connect to Jira. Open Jira, check your connection, and retry the pending Work Log."
+    );
+  }
+
+  const text = await response.text();
+  const payload = parseResponseBody(text);
+
+  if (!response.ok) {
+    const error = mapJiraError(response.status, payload);
+    error.status = response.status;
+    throw error;
+  }
+
+  return { payload, status: response.status };
+}
+
+function mapJiraError(status, payload) {
+  const detail = truncate(extractJiraApiError(payload), 180);
+
+  if (status === 401) {
+    return new UserFacingError(
+      "JIRA_AUTH_ERROR",
+      "Jira did not accept the current session. Open the configured Jira site, sign in, and retry."
+    );
+  }
+
+  if (status === 403) {
+    return new UserFacingError(
+      "JIRA_WORKLOG_PERMISSION",
+      "Jira denied the Work Log. The user needs Browse projects and Work on issues permission."
+    );
+  }
+
+  if (status === 404) {
+    return new UserFacingError(
+      "JIRA_WORKLOG_NOT_FOUND",
+      detail || "The Jira issue or Work Log endpoint was not found."
+    );
+  }
+
+  if (status === 400) {
+    return new UserFacingError(
+      "JIRA_WORKLOG_REJECTED",
+      detail || "Jira rejected the Work Log. Confirm that time tracking is enabled."
+    );
+  }
+
+  if (status >= 500) {
+    return new UserFacingError(
+      "JIRA_SERVER_ERROR",
+      "Jira is temporarily unavailable. The Work Log remains pending."
+    );
+  }
+
+  return new UserFacingError(
+    "JIRA_WORKLOG_ERROR",
+    detail || `Jira rejected the Work Log request (HTTP ${status}).`
+  );
+}
+
+function extractJiraApiError(payload) {
+  if (!payload) {
+    return "";
+  }
+
+  if (typeof payload === "string") {
+    return payload;
+  }
+
+  if (Array.isArray(payload?.errorMessages)) {
+    return payload.errorMessages.map(String).join(", ");
+  }
+
+  if (payload?.errors && typeof payload.errors === "object") {
+    return Object.values(payload.errors).map(String).join(", ");
+  }
+
+  return extractApiError(payload);
+}
+
+function worklogHasTogglEntryId(worklog, togglEntryId) {
+  const properties = Array.isArray(worklog?.properties) ? worklog.properties : [];
+  return properties.some((property) => {
+    if (property?.key !== WORKLOG_PROPERTY_KEY) {
+      return false;
+    }
+
+    const value = property.value || {};
+    return Number(value.togglTimeEntryId) === Number(togglEntryId);
+  });
+}
+
+function formatWorklogComment(template, record) {
+  let comment = normalizeWorklogCommentTemplate(template);
+  const values = {
+    description: record.description || "",
+    issueKey: record.issueKey || "",
+    togglId: String(record.togglEntryId || "")
+  };
+
+  for (const variable of WORKLOG_COMMENT_VARIABLES) {
+    comment = comment.replaceAll(`{${variable}}`, values[variable]);
+  }
+
+  return truncate(normalizeWhitespace(comment), 2000);
+}
+
+function toAtlassianDocument(text) {
+  return {
+    type: "doc",
+    version: 1,
+    content: [
+      {
+        type: "paragraph",
+        content: [{ type: "text", text }]
+      }
+    ]
+  };
+}
+
+function applyWorklogRounding(durationSeconds, rounding) {
+  const seconds = Math.max(1, Math.floor(Number(durationSeconds) || 0));
+
+  if (rounding === "nearest-minute") {
+    return Math.max(60, Math.round(seconds / 60) * 60);
+  }
+
+  if (rounding === "ceil-minute") {
+    return Math.max(60, Math.ceil(seconds / 60) * 60);
+  }
+
+  return seconds;
+}
+
+function formatJiraStarted(value) {
+  const parsed = Date.parse(value || "");
+  const date = Number.isFinite(parsed) ? new Date(parsed) : new Date();
+  return date.toISOString().replace(/Z$/, "+0000");
+}
+
+function calculateTimeEntryDuration(entry) {
+  const rawDuration = entry?.duration;
+  const duration = Number(rawDuration);
+  if (rawDuration !== null && rawDuration !== undefined && Number.isFinite(duration) && duration >= 0) {
+    return Math.max(1, Math.floor(duration));
+  }
+
+  const startedAt = Date.parse(entry?.start || "");
+  const stoppedAt = Date.parse(entry?.stop || "");
+  if (Number.isFinite(startedAt) && Number.isFinite(stoppedAt) && stoppedAt >= startedAt) {
+    return Math.max(1, Math.floor((stoppedAt - startedAt) / 1000));
+  }
+
+  return null;
+}
+
+function hasCompletedDuration(entry) {
+  const rawDuration = entry?.duration;
+  return Boolean(entry?.stop) || (
+    rawDuration !== null &&
+    rawDuration !== undefined &&
+    Number.isFinite(Number(rawDuration)) &&
+    Number(rawDuration) >= 0
+  );
+}
+
+function mergeTimeEntries(first, second) {
+  return {
+    ...(first || {}),
+    ...(second || {}),
+    id: second?.id || first?.id,
+    workspace_id:
+      second?.workspace_id || second?.wid || first?.workspace_id || first?.wid,
+    description: second?.description || first?.description || "",
+    start: second?.start || first?.start || null,
+    stop: second?.stop || first?.stop || null
+  };
+}
+
+async function getTimeEntryById(timeEntryId, apiToken) {
+  return togglRequest(`/api/v9/me/time_entries/${timeEntryId}`, {
+    apiToken,
+    notFoundAsNull: true
+  });
+}
+
+function worklogResultFromRecord(record, { existing = false } = {}) {
+  return {
+    status: "synced",
+    issueKey: record.issueKey,
+    togglEntryId: record.togglEntryId,
+    worklogId: record.worklogId || null,
+    durationSeconds: record.durationSeconds,
+    existing
+  };
+}
+
+function worklogQueuedResult(record, reason) {
+  return {
+    status: "queued",
+    reason,
+    issueKey: record.issueKey,
+    togglEntryId: record.togglEntryId,
+    durationSeconds: record.durationSeconds,
+    error: record.lastError || ""
+  };
 }
 
 async function togglRequest(path, options = {}) {
@@ -781,6 +1532,75 @@ function normalizeManualDescription(value) {
   }
 
   return description;
+}
+
+function normalizeWorklogSyncMode(value) {
+  const mode = String(value || DEFAULT_SETTINGS.worklogSyncMode);
+  if (!["automatic", "manual"].includes(mode)) {
+    throw new UserFacingError(
+      "INVALID_WORKLOG_SYNC_MODE",
+      "Choose Automatic or Ask before syncing for Jira Work Logs."
+    );
+  }
+  return mode;
+}
+
+function coerceWorklogSyncMode(value) {
+  return ["automatic", "manual"].includes(value)
+    ? value
+    : DEFAULT_SETTINGS.worklogSyncMode;
+}
+
+function normalizeWorklogRounding(value) {
+  const rounding = String(value || DEFAULT_SETTINGS.worklogRounding);
+  if (!["exact", "nearest-minute", "ceil-minute"].includes(rounding)) {
+    throw new UserFacingError(
+      "INVALID_WORKLOG_ROUNDING",
+      "Choose a valid Jira Work Log rounding option."
+    );
+  }
+  return rounding;
+}
+
+function coerceWorklogRounding(value) {
+  return ["exact", "nearest-minute", "ceil-minute"].includes(value)
+    ? value
+    : DEFAULT_SETTINGS.worklogRounding;
+}
+
+function normalizeWorklogCommentTemplate(value) {
+  const template = value === undefined || value === null
+    ? DEFAULT_SETTINGS.worklogCommentTemplate
+    : String(value).trim();
+
+  if (template.length > 500) {
+    throw new UserFacingError(
+      "WORKLOG_COMMENT_TOO_LONG",
+      "The Jira Work Log comment template can contain at most 500 characters."
+    );
+  }
+
+  const unknownVariables = [...template.matchAll(/\{([A-Za-z][A-Za-z0-9]*)\}/g)]
+    .map((match) => match[1])
+    .filter((name) => !WORKLOG_COMMENT_VARIABLE_SET.has(name));
+
+  if (unknownVariables.length > 0) {
+    const names = [...new Set(unknownVariables)].map((name) => `{${name}}`).join(", ");
+    throw new UserFacingError(
+      "UNKNOWN_WORKLOG_COMMENT_VARIABLE",
+      `Unknown Work Log comment variable${unknownVariables.length > 1 ? "s" : ""}: ${names}.`
+    );
+  }
+
+  return template;
+}
+
+function coerceWorklogCommentTemplate(value) {
+  try {
+    return normalizeWorklogCommentTemplate(value);
+  } catch {
+    return DEFAULT_SETTINGS.worklogCommentTemplate;
+  }
 }
 
 function normalizeJiraOrigin(value) {

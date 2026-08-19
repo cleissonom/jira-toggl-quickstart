@@ -43,16 +43,12 @@ header span {
 }
 
 .logo {
-  display: grid;
-  place-items: center;
   width: 34px;
   height: 34px;
   flex: 0 0 34px;
   border-radius: 10px;
-  background: #0c66e4;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 800;
+  box-shadow: 0 4px 12px rgba(9, 30, 66, 0.15);
+  object-fit: cover;
 }
 
 .timer,
@@ -148,6 +144,7 @@ header span {
 }
 
 .empty,
+.notice,
 .error {
   margin: 14px 0 0;
   padding: 12px;
@@ -161,10 +158,79 @@ header span {
   color: #44546f;
 }
 
+.notice {
+  background: #e9f2ff;
+  color: #0747a6;
+}
+
+.notice.success {
+  background: #dcfff1;
+  color: #216e4e;
+}
+
+.notice.warning {
+  background: #fff7d6;
+  color: #7f5f01;
+}
+
 .error {
   background: #ffeceb;
   color: #ae2a19;
 }
+
+
+.worklogs {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #f5cd47;
+  border-radius: 12px;
+  background: #fffdf5;
+}
+
+.worklogs-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.worklogs-count {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #fff0b3;
+  color: #7f5f01;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.worklogs ul {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.worklogs li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #fff;
+  color: #44546f;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.worklogs li strong {
+  color: #172b4d;
+  font-size: 11px;
+}
+
+.worklogs li .worklog-error { color: #ae2a19; }
+.worklogs button { width: 100%; }
 
 .actions {
   display: flex;

@@ -26,6 +26,13 @@ const projectIdInput = document.getElementById("project-id");
 const templateInput = document.getElementById("description-template");
 const billableInput = document.getElementById("billable");
 const stopExistingInput = document.getElementById("stop-existing");
+const syncWorklogsInput = document.getElementById("sync-worklogs");
+const worklogSyncModeInput = document.getElementById("worklog-sync-mode");
+const worklogRoundingInput = document.getElementById("worklog-rounding");
+const worklogCommentTemplateInput = document.getElementById("worklog-comment-template");
+const worklogOptions = document.getElementById("worklog-options");
+const worklogState = document.getElementById("worklog-state");
+const pendingWorklogs = document.getElementById("pending-worklogs");
 const advancedSettings = document.getElementById("advanced-settings");
 const billingState = document.getElementById("billing-state");
 const descriptionPreview = document.getElementById("description-preview");
@@ -34,6 +41,7 @@ const clearButton = document.getElementById("clear-button");
 const statusElement = document.getElementById("status");
 const connectionBadge = document.getElementById("connection-badge");
 const variableButtons = [...document.querySelectorAll("[data-variable]")];
+const worklogVariableButtons = [...document.querySelectorAll("[data-worklog-variable]")];
 
 let currentJiraOrigin = "";
 
@@ -47,11 +55,18 @@ clearButton.addEventListener("click", () => {
 });
 
 billableInput.addEventListener("change", updatePreview);
+syncWorklogsInput.addEventListener("change", updatePreview);
 templateInput.addEventListener("input", updatePreview);
 
 for (const button of variableButtons) {
   button.addEventListener("click", () => {
-    insertTemplateVariable(button.dataset.variable || "");
+    insertVariable(templateInput, button.dataset.variable || "");
+  });
+}
+
+for (const button of worklogVariableButtons) {
+  button.addEventListener("click", () => {
+    insertVariable(worklogCommentTemplateInput, button.dataset.worklogVariable || "");
   });
 }
 
@@ -76,6 +91,11 @@ function applySettings(settings) {
   templateInput.value = settings.descriptionTemplate || DEFAULT_TEMPLATE;
   billableInput.checked = settings.billable === true;
   stopExistingInput.checked = settings.stopExisting !== false;
+  syncWorklogsInput.checked = settings.syncWorklogs === true;
+  worklogSyncModeInput.value = settings.worklogSyncMode || "automatic";
+  worklogRoundingInput.value = settings.worklogRounding || "exact";
+  worklogCommentTemplateInput.value = settings.worklogCommentTemplate ??
+    "Synced from Toggl: {description}";
   apiTokenInput.required = !settings.hasApiToken;
 
   if (settings.hasApiToken) {
@@ -89,6 +109,12 @@ function applySettings(settings) {
     settings.descriptionTemplate !== DEFAULT_TEMPLATE ||
     settings.stopExisting === false
   );
+
+  const pendingCount = Number(settings.pendingWorklogCount || 0);
+  pendingWorklogs.textContent = pendingCount === 1
+    ? "1 Jira Work Log is waiting in the popup retry queue."
+    : `${pendingCount} Jira Work Logs are waiting in the popup retry queue.`;
+  pendingWorklogs.classList.toggle("hidden", pendingCount === 0);
 
   connectionBadge.classList.remove("connected");
 
@@ -154,7 +180,11 @@ async function saveSettings() {
       projectId: projectIdInput.value,
       billable: billableInput.checked,
       descriptionTemplate: templateInput.value,
-      stopExisting: stopExistingInput.checked
+      stopExisting: stopExistingInput.checked,
+      syncWorklogs: syncWorklogsInput.checked,
+      worklogSyncMode: worklogSyncModeInput.value,
+      worklogRounding: worklogRoundingInput.value,
+      worklogCommentTemplate: worklogCommentTemplateInput.value
     }
   });
 
@@ -180,9 +210,12 @@ async function saveSettings() {
     : "";
   const project = response.data.projectName ? ` Project: ${response.data.projectName}.` : "";
   const billing = response.data.billable ? " Billable: on." : " Billable: off.";
+  const worklogs = response.data.syncWorklogs
+    ? ` Jira Work Logs: ${response.data.worklogSyncMode === "manual" ? "ask before syncing" : "automatic"}.`
+    : " Jira Work Logs: off.";
 
   showStatus(
-    `Settings saved.${account}${workspace}${project}${billing} Reload Jira tabs that were already open.`,
+    `Settings saved.${account}${workspace}${project}${billing}${worklogs} Reload Jira tabs that were already open.`,
     "success"
   );
 }
@@ -210,6 +243,11 @@ async function clearSettings() {
   templateInput.value = DEFAULT_TEMPLATE;
   billableInput.checked = false;
   stopExistingInput.checked = true;
+  syncWorklogsInput.checked = false;
+  worklogSyncModeInput.value = "automatic";
+  worklogRoundingInput.value = "exact";
+  worklogCommentTemplateInput.value = "Synced from Toggl: {description}";
+  pendingWorklogs.classList.add("hidden");
   advancedSettings.open = false;
   apiTokenInput.required = true;
   apiTokenInput.placeholder = "Paste your Toggl API token";
@@ -231,24 +269,29 @@ function updatePreview() {
   const isBillable = billableInput.checked;
   billingState.textContent = isBillable ? "On" : "Off";
   billingState.classList.toggle("on", isBillable);
+
+  const syncWorklogs = syncWorklogsInput.checked;
+  worklogState.textContent = syncWorklogs ? "On" : "Off";
+  worklogState.classList.toggle("on", syncWorklogs);
+  worklogOptions.classList.toggle("hidden", !syncWorklogs);
 }
 
-function insertTemplateVariable(variable) {
+function insertVariable(input, variable) {
   if (!variable) {
     return;
   }
 
-  const start = Number.isInteger(templateInput.selectionStart)
-    ? templateInput.selectionStart
-    : templateInput.value.length;
-  const end = Number.isInteger(templateInput.selectionEnd)
-    ? templateInput.selectionEnd
+  const start = Number.isInteger(input.selectionStart)
+    ? input.selectionStart
+    : input.value.length;
+  const end = Number.isInteger(input.selectionEnd)
+    ? input.selectionEnd
     : start;
 
-  templateInput.value = `${templateInput.value.slice(0, start)}${variable}${templateInput.value.slice(end)}`;
+  input.value = `${input.value.slice(0, start)}${variable}${input.value.slice(end)}`;
   const cursor = start + variable.length;
-  templateInput.focus();
-  templateInput.setSelectionRange(cursor, cursor);
+  input.focus();
+  input.setSelectionRange(cursor, cursor);
   updatePreview();
 }
 

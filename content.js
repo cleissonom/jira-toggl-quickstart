@@ -365,16 +365,35 @@
 
     const action = response.data?.action;
     if (action === "started") {
-      showMessage(
-        response.data.stoppedPrevious
-          ? "The previous timer was stopped and the new issue was started."
-          : "Timer started in Toggl.",
-        "success"
-      );
+      const previousSync = response.data?.previousWorklogSync;
+      if (response.data.stoppedPrevious && previousSync?.status === "synced") {
+        showMessage(
+          `The previous timer was logged to ${previousSync.issueKey}; the new issue was started.`,
+          "success"
+        );
+      } else if (response.data.stoppedPrevious && previousSync?.status === "queued") {
+        showMessage(
+          "The previous timer stopped and its Jira Work Log is pending in the extension popup."
+        );
+      } else {
+        showMessage(
+          response.data.stoppedPrevious
+            ? "The previous timer was stopped and the new issue was started."
+            : "Timer started in Toggl.",
+          "success"
+        );
+      }
     } else if (action === "already-running") {
       showMessage("This issue is already running in Toggl.", "success");
     } else if (action === "stopped") {
-      showMessage("Timer stopped in Toggl.", "success");
+      const worklogSync = response.data?.worklogSync;
+      if (worklogSync?.status === "synced") {
+        showMessage(`Timer stopped and a Jira Work Log was created for ${worklogSync.issueKey}.`, "success");
+      } else if (worklogSync?.status === "queued") {
+        showMessage("Timer stopped. The Jira Work Log is pending in the extension popup.");
+      } else {
+        showMessage("Timer stopped in Toggl.", "success");
+      }
     } else {
       showMessage("No timer was running.");
     }

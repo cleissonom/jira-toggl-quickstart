@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0 — 2026-08-19
+
+- Added optional one-way synchronization from Jira-linked Toggl timers to Jira Work Logs.
+- Added Automatic and Ask before syncing modes.
+- Added exact, nearest-minute, and round-up Work Log duration handling.
+- Added a configurable Work Log comment template with `{description}`, `{issueKey}`, and `{togglId}` variables.
+- Added a protected local association and retry queue for Jira-linked Toggl entries.
+- Added popup controls for confirming and retrying pending Work Logs.
+- Added reconciliation for Jira-linked timers stopped outside the extension when the popup is opened.
+- Added Jira Work Log properties and lookup-based duplicate prevention.
+- Kept Jira remaining estimates unchanged when creating Work Logs.
+- Replaced all 16, 32, 48, and 128 px extension icons with the new task-to-timer artwork.
+- Expanded automated coverage for Work Log creation, retries, duplicate prevention, rounding, reconciliation, UI contracts, and icon dimensions.
+
 ## 0.3.0 — 2026-08-19
 
 - Added a manual timer form to the toolbar popup when no timer is running.

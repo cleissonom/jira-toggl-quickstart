@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Jira \u2192 Toggl Quick Start",
-  "version": "0.3.0",
-  "description": "Start Toggl Track timers from Jira issues or a manual popup entry.",
+  "name": "Jira → Toggl Quick Start",
+  "version": "0.4.0",
+  "description": "Start Toggl timers from Jira and optionally sync stopped timers to Jira Work Logs.",
   "minimum_chrome_version": "102",
   "permissions": [
     "scripting",
@@ -18,7 +18,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Jira \u2192 Toggl",
+    "default_title": "Jira → Toggl",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

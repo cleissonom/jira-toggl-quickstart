@@ -9,7 +9,7 @@
   <body>
     <main class="page">
       <header class="hero">
-        <div class="logo" aria-hidden="true">▶</div>
+        <img class="logo" src="icons/icon48.png" alt="" aria-hidden="true" />
         <div>
           <p class="eyebrow">Jira → Toggl Quick Start</p>
           <h1>Set up once. Track in one click.</h1>
@@ -76,6 +76,72 @@
             </span>
             <span id="billing-state" class="choice-state">Off</span>
           </label>
+
+          <section class="worklog-card" aria-labelledby="worklog-title">
+            <label class="choice-card featured worklog-toggle">
+              <input id="sync-worklogs" name="syncWorklogs" type="checkbox" />
+              <span class="choice-copy">
+                <strong id="worklog-title">Sync stopped Jira timers to Work Logs</strong>
+                <small>
+                  Create a Jira Work Log when a timer started from the Jira button stops.
+                  Toggl remains the source of the tracked duration.
+                </small>
+              </span>
+              <span id="worklog-state" class="choice-state">Off</span>
+            </label>
+
+            <div id="worklog-options" class="worklog-options hidden">
+              <div class="field-grid">
+                <label class="field">
+                  <span>Sync behavior</span>
+                  <select id="worklog-sync-mode" name="worklogSyncMode">
+                    <option value="automatic">Automatic</option>
+                    <option value="manual">Ask before syncing</option>
+                  </select>
+                  <small>
+                    Ask before syncing keeps completed entries pending until you confirm them in the popup.
+                  </small>
+                </label>
+
+                <label class="field">
+                  <span>Duration rounding</span>
+                  <select id="worklog-rounding" name="worklogRounding">
+                    <option value="exact">Exact duration in seconds</option>
+                    <option value="nearest-minute">Nearest minute</option>
+                    <option value="ceil-minute">Round up to the next minute</option>
+                  </select>
+                  <small>The Jira remaining estimate is always left unchanged.</small>
+                </label>
+              </div>
+
+              <label class="field">
+                <span>Work Log comment <em>(optional)</em></span>
+                <input
+                  id="worklog-comment-template"
+                  name="worklogCommentTemplate"
+                  type="text"
+                  maxlength="500"
+                  value="Synced from Toggl: {description}"
+                />
+                <small>
+                  Available variables: <code>{description}</code>, <code>{issueKey}</code>, and
+                  <code>{togglId}</code>. Leave blank to create a Work Log without a comment.
+                </small>
+              </label>
+
+              <div class="worklog-variable-picker" role="group" aria-label="Work Log comment variables">
+                <button type="button" class="variable-chip" data-worklog-variable="{description}"><code>{description}</code><span>Toggl description</span></button>
+                <button type="button" class="variable-chip" data-worklog-variable="{issueKey}"><code>{issueKey}</code><span>Jira issue key</span></button>
+                <button type="button" class="variable-chip" data-worklog-variable="{togglId}"><code>{togglId}</code><span>Toggl entry ID</span></button>
+              </div>
+
+              <p id="pending-worklogs" class="pending-worklogs hidden"></p>
+              <small>
+                The Jira user must be signed in and have Browse projects and Work on issues permission.
+                Failed synchronizations remain in a local retry queue available from the extension popup.
+              </small>
+            </div>
+          </section>
 
           <div class="preview" aria-live="polite">
             <span>New timer preview</span>
@@ -164,8 +230,9 @@
             <p>
               When you start a Jira timer, the extension reads only the issue fields needed by
               your description template and sends the resulting timer description and selected
-              defaults to Toggl. The token and settings stay in this Chrome profile. Nothing is
-              sent to the extension developer.
+              defaults to Toggl. If Work Log sync is enabled, the stopped duration, start time,
+              issue key, and configured comment are sent to your Jira site. Retry records stay in
+              this Chrome profile. Nothing is sent to the extension developer.
             </p>
           </aside>
 
@@ -183,8 +250,8 @@
         <div class="steps">
           <div><span>1</span><p>Open an issue or select one from a Jira board or backlog.</p></div>
           <div><span>2</span><p>Click the floating <strong>Start in Toggl</strong> button.</p></div>
-          <div><span>3</span><p>Click the same button again to stop that issue timer.</p></div>
-          <div><span>4</span><p>For non-Jira work, type a description directly in the extension popup.</p></div>
+          <div><span>3</span><p>Click the same button again to stop it and optionally create a Jira Work Log.</p></div>
+          <div><span>4</span><p>Review or retry pending Work Logs from the popup; manual timers remain Toggl-only.</p></div>
         </div>
       </section>
 

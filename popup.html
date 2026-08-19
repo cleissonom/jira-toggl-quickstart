@@ -9,7 +9,7 @@
   <body>
     <main>
       <header>
-        <div class="logo" aria-hidden="true">▶</div>
+        <img class="logo" src="icons/icon32.png" alt="" aria-hidden="true" />
         <div>
           <strong>Jira → Toggl</strong>
           <span id="workspace">Loading…</span>
@@ -46,7 +46,17 @@
         </form>
       </section>
 
+      <section id="worklogs" class="worklogs hidden" aria-labelledby="worklogs-title">
+        <div class="worklogs-heading">
+          <span id="worklogs-title" class="kicker">Jira Work Logs</span>
+          <span id="worklogs-count" class="worklogs-count"></span>
+        </div>
+        <ul id="worklogs-list"></ul>
+        <button id="sync-worklogs" class="secondary" type="button">Sync pending Work Logs</button>
+      </section>
+
       <p id="empty" class="empty">Checking Toggl…</p>
+      <p id="notice" class="notice hidden"></p>
       <p id="error" class="error hidden"></p>
 
       <div class="actions">
