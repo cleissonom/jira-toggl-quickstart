@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jira → Toggl Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div class="logo" aria-hidden="true">▶</div>
+        <div>
+          <p class="eyebrow">Jira → Toggl Quick Start</p>
+          <h1>Set up once. Track in one click.</h1>
+          <p class="intro">
+            The extension turns a Jira issue into a Toggl description such as
+            <code>[PROJ-123] Issue summary</code>.
+          </p>
+        </div>
+      </header>
+
+      <section class="card" aria-labelledby="setup-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="setup-title">Quick setup</h2>
+            <p>Paste your Jira URL and Toggl token, choose the billing default, then save.</p>
+          </div>
+          <span id="connection-badge" class="badge">Not configured</span>
+        </div>
+
+        <form id="settings-form">
+          <div class="field-grid">
+            <label class="field">
+              <span>Jira site URL</span>
+              <input
+                id="jira-origin"
+                name="jiraOrigin"
+                type="url"
+                inputmode="url"
+                autocomplete="url"
+                autocapitalize="none"
+                spellcheck="false"
+                required
+                placeholder="https://your-company.atlassian.net"
+              />
+              <small>Paste the site, board, backlog, or issue URL. Only its HTTPS origin is saved.</small>
+            </label>
+
+            <label class="field">
+              <span>Toggl Track API token</span>
+              <input
+                id="api-token"
+                name="apiToken"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="Paste your Toggl API token"
+              />
+              <small>
+                Need a token?
+                <a
+                  href="https://track.toggl.com/profile#api-token"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >Open the Toggl API Token page ↗</a>
+              </small>
+            </label>
+          </div>
+
+          <label class="choice-card featured">
+            <input id="billable" name="billable" type="checkbox" />
+            <span class="choice-copy">
+              <strong>Billable time entries</strong>
+              <small>When enabled, every timer started by this extension is marked billable in Toggl.</small>
+            </span>
+            <span id="billing-state" class="choice-state">Off</span>
+          </label>
+
+          <div class="preview" aria-live="polite">
+            <span>New timer preview</span>
+            <code id="description-preview">[PROJ-123] Example Jira issue</code>
+          </div>
+
+          <details id="advanced-settings" class="advanced">
+            <summary>
+              <span>Advanced settings</span>
+              <small>Workspace, fixed project, description template, and timer switching</small>
+            </summary>
+
+            <div class="advanced-content">
+              <div class="field-grid">
+                <label class="field">
+                  <span>Workspace ID <em>(optional)</em></span>
+                  <input
+                    id="workspace-id"
+                    name="workspaceId"
+                    type="number"
+                    min="1"
+                    inputmode="numeric"
+                    placeholder="Auto-detect default workspace"
+                  />
+                  <small>Leave blank to use the default workspace returned by Toggl.</small>
+                </label>
+
+                <label class="field">
+                  <span>Fixed Toggl project ID <em>(optional)</em></span>
+                  <input
+                    id="project-id"
+                    name="projectId"
+                    type="number"
+                    min="1"
+                    inputmode="numeric"
+                    placeholder="No fixed project"
+                  />
+                  <small>Use this when all Jira timers should be assigned to one Toggl project.</small>
+                </label>
+              </div>
+
+              <label class="field">
+                <span>Description template</span>
+                <input
+                  id="description-template"
+                  name="descriptionTemplate"
+                  type="text"
+                  maxlength="300"
+                  value="[{key}] {summary}"
+                />
+                <small>
+                  Default: <code>[{key}] {summary}</code>. Click a variable below to insert it.
+                  Optional values that Jira does not return are rendered as empty text.
+                </small>
+              </label>
+
+              <div class="variable-picker" role="group" aria-label="Description template variables">
+                <button type="button" class="variable-chip" data-variable="{key}"><code>{key}</code><span>Issue key</span></button>
+                <button type="button" class="variable-chip" data-variable="{summary}"><code>{summary}</code><span>Summary</span></button>
+                <button type="button" class="variable-chip" data-variable="{url}"><code>{url}</code><span>Issue URL</span></button>
+                <button type="button" class="variable-chip" data-variable="{projectKey}"><code>{projectKey}</code><span>Project key</span></button>
+                <button type="button" class="variable-chip" data-variable="{projectName}"><code>{projectName}</code><span>Project name</span></button>
+                <button type="button" class="variable-chip" data-variable="{issueNumber}"><code>{issueNumber}</code><span>Issue number</span></button>
+                <button type="button" class="variable-chip" data-variable="{issueType}"><code>{issueType}</code><span>Issue type</span></button>
+                <button type="button" class="variable-chip" data-variable="{status}"><code>{status}</code><span>Status</span></button>
+                <button type="button" class="variable-chip" data-variable="{assignee}"><code>{assignee}</code><span>Assignee</span></button>
+                <button type="button" class="variable-chip" data-variable="{reporter}"><code>{reporter}</code><span>Reporter</span></button>
+                <button type="button" class="variable-chip" data-variable="{priority}"><code>{priority}</code><span>Priority</span></button>
+                <button type="button" class="variable-chip" data-variable="{parentKey}"><code>{parentKey}</code><span>Parent key</span></button>
+                <button type="button" class="variable-chip" data-variable="{labels}"><code>{labels}</code><span>Labels</span></button>
+                <button type="button" class="variable-chip" data-variable="{components}"><code>{components}</code><span>Components</span></button>
+              </div>
+
+              <label class="choice-card">
+                <input id="stop-existing" name="stopExisting" type="checkbox" checked />
+                <span class="choice-copy">
+                  <strong>Automatically switch timers</strong>
+                  <small>Stop the current Toggl timer before starting a different Jira issue.</small>
+                </span>
+              </label>
+            </div>
+          </details>
+
+          <aside class="data-disclosure" aria-labelledby="data-use-title">
+            <strong id="data-use-title">How your data is used</strong>
+            <p>
+              When you start a Jira timer, the extension reads only the issue fields needed by
+              your description template and sends the resulting timer description and selected
+              defaults to Toggl. The token and settings stay in this Chrome profile. Nothing is
+              sent to the extension developer.
+            </p>
+          </aside>
+
+          <div id="status" class="status" role="status" aria-live="polite"></div>
+
+          <div class="actions">
+            <button id="save-button" class="primary" type="submit">Connect and save</button>
+            <button id="clear-button" class="secondary" type="button">Remove settings</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card compact" aria-labelledby="usage-title">
+        <h2 id="usage-title">Daily use</h2>
+        <div class="steps">
+          <div><span>1</span><p>Open an issue or select one from a Jira board or backlog.</p></div>
+          <div><span>2</span><p>Click the floating <strong>Start in Toggl</strong> button.</p></div>
+          <div><span>3</span><p>Click the same button again to stop that issue timer.</p></div>
+          <div><span>4</span><p>For non-Jira work, type a description directly in the extension popup.</p></div>
+        </div>
+      </section>
+
+      <section class="card compact note-card" aria-labelledby="privacy-title">
+        <h2 id="privacy-title">Focused permissions</h2>
+        <p>
+          Chrome asks for access only to the Jira site entered above. The Toggl token stays in this Chrome profile and is used only by the extension service worker.
+        </p>
+      </section>
+    </main>
+
+    <script src="options.js"></script>
+  </body>
+</html>

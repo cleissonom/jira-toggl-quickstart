@@ -1,0 +1,67 @@
+name: Release extension package
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Validate extension
+        run: npm run validate
+
+      - name: Verify tag matches manifest version
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_version="$(node -p "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')).version")"
+          expected_tag="v${manifest_version}"
+          if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match manifest version ${manifest_version}." >&2
+            exit 1
+          fi
+
+      - name: Build Chrome Web Store ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')).version")"
+          archive="jira-toggl-quickstart-v${version}.zip"
+          zip -r "$archive" \
+            manifest.json \
+            background.js \
+            content.js \
+            options.css \
+            options.html \
+            options.js \
+            popup.css \
+            popup.html \
+            popup.js \
+            icons
+          sha256sum "$archive" > "${archive}.sha256"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(node -p "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')).version")"
+          archive="jira-toggl-quickstart-v${version}.zip"
+          gh release create "${GITHUB_REF_NAME}" \
+            "$archive" \
+            "${archive}.sha256" \
+            --title "Jira → Toggl Quick Start ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag

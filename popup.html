@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jira → Toggl</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="logo" aria-hidden="true">▶</div>
+        <div>
+          <strong>Jira → Toggl</strong>
+          <span id="workspace">Loading…</span>
+        </div>
+      </header>
+
+      <section id="timer" class="timer hidden" aria-live="polite">
+        <div class="timer-heading">
+          <span class="kicker">Current timer</span>
+          <span id="billing" class="billing hidden"></span>
+        </div>
+        <p id="description"></p>
+        <time id="elapsed">00:00:00</time>
+      </section>
+
+      <section id="manual" class="manual hidden" aria-labelledby="manual-title">
+        <div class="manual-heading">
+          <span id="manual-title" class="kicker">Start a timer</span>
+          <span id="manual-billing" class="manual-default"></span>
+        </div>
+        <form id="manual-form">
+          <label for="manual-description">What are you working on?</label>
+          <input
+            id="manual-description"
+            name="description"
+            type="text"
+            maxlength="1000"
+            autocomplete="off"
+            placeholder="Type a timer description"
+            required
+          />
+          <small id="manual-context">Uses your saved Toggl defaults.</small>
+          <button id="start" class="primary" type="submit">Start timer</button>
+        </form>
+      </section>
+
+      <p id="empty" class="empty">Checking Toggl…</p>
+      <p id="error" class="error hidden"></p>
+
+      <div class="actions">
+        <button id="stop" class="danger hidden" type="button">Stop timer</button>
+        <button id="settings" class="secondary" type="button">Settings</button>
+      </div>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

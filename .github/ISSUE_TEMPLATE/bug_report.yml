@@ -1,0 +1,64 @@
+name: Bug report
+description: Report reproducible extension behavior that is not working as expected.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve Jira → Toggl Quick Start. Do not include API tokens, private Jira data, or other credentials.
+  - type: input
+    id: version
+    attributes:
+      label: Extension version
+      placeholder: 0.3.0
+    validations:
+      required: true
+  - type: input
+    id: chrome
+    attributes:
+      label: Chrome version and operating system
+      placeholder: Chrome 140 on macOS 15
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Jira button
+        - Popup manual timer
+        - Settings
+        - Toggl API integration
+        - Permissions
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use generic examples and remove private company or issue information.
+      placeholder: |
+        1. Open a Jira issue.
+        2. Click Start in Toggl.
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Remove tokens, names, private URLs, issue summaries, and identifiers before attaching anything.
