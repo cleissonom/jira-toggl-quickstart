@@ -198,7 +198,7 @@ test("shows zero logged and the full amount left when Jira has no logged time", 
   assert.equal(lines.detail, "8h left");
 });
 
-test("prefers Jira remaining estimate for the left value", () => {
+test("derives Jira time left from original minus logged time", () => {
   const { context } = createPopupHarness();
   const lines = context.getJiraProgressLines({
     loggedSeconds: 18000,
@@ -206,7 +206,7 @@ test("prefers Jira remaining estimate for the left value", () => {
     remainingEstimateSeconds: 5400
   });
   assert.equal(lines.summary, "5h logged / 8h original");
-  assert.equal(lines.detail, "1h 30m left");
+  assert.equal(lines.detail, "3h left");
 });
 
 test("copies Jira Markdown and shows success feedback", async () => {

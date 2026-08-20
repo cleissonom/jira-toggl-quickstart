@@ -8,7 +8,7 @@ The extension stores the following values in `chrome.storage.local`:
 
 - Toggl Track API token.
 - Configured Jira origin.
-- Required Toggl workspace and project identifiers and their display names.
+- Toggl workspace identifier and display name, plus an optional selected project identifier and display name.
 - Billable preference.
 - Description template and automatic timer-switching preference.
 - Optional Jira Work Log settings, including synchronization mode, rounding, and comment template.
@@ -32,10 +32,11 @@ Toggl requests are used to:
 
 - validate the API token;
 - detect or validate the selected workspace;
-- validate that the required project exists and belongs to that workspace;
+- read related project metadata, including active status and `actual_hours`, to choose an optional project when the field is blank;
+- validate an explicitly entered project against the selected workspace;
 - read the current running entry;
 - read the current user's entries from browser-local midnight through the current time for **Worked today**;
-- create every new entry with the configured `project_id`; and
+- create new entries with `project_id` when a project is selected, or without it when no active project is available; and
 - stop or reconcile entries.
 
 The daily request may return entries from multiple Toggl projects or workspaces because the popup total represents all work by the current user during the local day. The service worker calculates the total locally and returns only the aggregate and minimal running-entry metadata to the popup; it does not store or disclose the raw daily response.
@@ -46,7 +47,7 @@ Depending on the configured description template, Jira fields read by the conten
 
 When the current Toggl entry can be associated with a Jira issue, the trusted extension service worker may also request the issue key, summary, description, logged time, original estimate, and remaining estimate from the configured Jira origin. These values are used only to show Jira progress and prepare the copy action in the extension popup. Jira Cloud descriptions returned as Atlassian Document Format are converted to Markdown locally. Jira issue content is written to the clipboard only after the user explicitly clicks **Copy Jira title & description**.
 
-When Work Log synchronization is enabled, the extension sends the target issue key in the Jira request URL and sends the timer start time, duration, optional configured comment, and a property containing the Toggl time-entry ID and workspace ID to the configured Jira site. The Jira remaining estimate is left unchanged. Before creating a Work Log, the extension may read existing Work Logs and their properties to reduce duplicate submissions.
+When Work Log synchronization is enabled, the extension sends the target issue key in the Jira request URL and sends the timer start time, duration, optional configured comment, and a property containing the Toggl time-entry ID and workspace ID to the configured Jira site. Jira is instructed to adjust the remaining estimate automatically for the new Work Log. Before creating a Work Log, the extension may read existing Work Logs and their properties to reduce duplicate submissions.
 
 No browsing history, Jira issue data, Toggl time entries, manually entered descriptions, tokens, clipboard content, Work Log data, or retry records are sent to the extension author or any separate service.
 
@@ -72,4 +73,4 @@ The extension's use and transfer of user data is limited to providing this funct
 
 Users can disable Work Log synchronization without disabling Toggl timers. Pending records remain visible in the popup so the user can explicitly retry them. **Remove settings**, clearing extension data, or uninstalling the extension removes the local queue and saved configuration.
 
-Toggl time entries and Jira Work Logs already created belong to the user's accounts and must be managed or deleted in Toggl or Jira. Version 0.5 does not automatically propagate later edits or deletions between the two services.
+Toggl time entries and Jira Work Logs already created belong to the user's accounts and must be managed or deleted in Toggl or Jira. Version 0.5.1 does not automatically propagate later edits or deletions between the two services.

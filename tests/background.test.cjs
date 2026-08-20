@@ -236,7 +236,7 @@ function configuredSettings(overrides = {}) {
     stopExisting: true,
     syncWorklogs: false,
     worklogSyncMode: "automatic",
-    worklogRounding: "exact",
+    worklogRounding: "nearest-minute",
     worklogCommentTemplate: "Synced from Toggl: {description}",
     ...overrides
   };
@@ -293,7 +293,10 @@ test("saves a configurable Jira origin, billable default, and protected Toggl to
   assert.equal(script.persistAcrossSessions, true);
 
   assert.equal(harness.requests.length, 3);
-  assert.equal(harness.requests[0].url, "https://api.track.toggl.com/api/v9/me");
+  assert.equal(
+    harness.requests[0].url,
+    "https://api.track.toggl.com/api/v9/me?with_related_data=true"
+  );
   assert.equal(
     harness.requests[0].headers.Authorization,
     `Basic ${btoa("test-token:api_token")}`
@@ -563,12 +566,12 @@ test("clearing settings unregisters the Jira script and removes the saved origin
 });
 
 
-test("creates an exact Jira Work Log when a Jira timer stops", async () => {
+test("creates a nearest-minute Jira Work Log and adjusts the remaining estimate", async () => {
   const harness = createHarness({
     initialSettings: configuredSettings({
       syncWorklogs: true,
       worklogSyncMode: "automatic",
-      worklogRounding: "exact",
+      worklogRounding: "nearest-minute",
       worklogCommentTemplate: "Synced from Toggl: {description} ({togglId})"
     }),
     permissions: [JIRA_MATCH]
@@ -609,7 +612,7 @@ test("creates an exact Jira Work Log when a Jira timer stops", async () => {
       duration: 2525
     }),
     jsonResponse({ startAt: 0, maxResults: 1000, total: 0, worklogs: [] }),
-    jsonResponse({ id: "70001", timeSpentSeconds: 2525 })
+    jsonResponse({ id: "70001", timeSpentSeconds: 2520 })
   );
 
   const result = await harness.context.handleMessage(
@@ -633,13 +636,13 @@ test("creates an exact Jira Work Log when a Jira timer stops", async () => {
   assert.ok(jiraGet, "expected duplicate-prevention Work Log lookup");
   assert.ok(jiraPost, "expected Jira Work Log creation request");
   assert.match(jiraPost.url, /\/rest\/api\/3\/issue\/PROJ-123\/worklog\?/);
-  assert.match(jiraPost.url, /adjustEstimate=leave/);
+  assert.match(jiraPost.url, /adjustEstimate=auto/);
   assert.match(jiraPost.url, /notifyUsers=false/);
   assert.equal(jiraPost.credentials, "include");
   assert.equal(jiraPost.cache, "no-store");
 
   const body = JSON.parse(jiraPost.body);
-  assert.equal(body.timeSpentSeconds, 2525);
+  assert.equal(body.timeSpentSeconds, 2520);
   assert.equal(body.started, "2026-08-19T10:00:00.000+0000");
   assert.equal(body.comment.type, "doc");
   assert.equal(
@@ -881,9 +884,9 @@ test("reconciles a Jira timer stopped outside the extension when the popup opens
   );
 });
 
-test("applies the configured Jira Work Log rounding modes", () => {
+test("applies the supported Jira Work Log rounding modes", () => {
   const harness = createHarness();
-  assert.equal(harness.context.applyWorklogRounding(89, "exact"), 89);
+  assert.equal(harness.context.applyWorklogRounding(89, "exact"), 60);
   assert.equal(harness.context.applyWorklogRounding(89, "nearest-minute"), 60);
   assert.equal(harness.context.applyWorklogRounding(91, "nearest-minute"), 120);
   assert.equal(harness.context.applyWorklogRounding(61, "ceil-minute"), 120);
@@ -1040,7 +1043,7 @@ test("rejects unknown Jira Work Log comment variables before calling either API"
           stopExisting: true,
           syncWorklogs: true,
           worklogSyncMode: "automatic",
-          worklogRounding: "exact",
+          worklogRounding: "nearest-minute",
           worklogCommentTemplate: "Synced from {unknownValue}"
         }
       },
@@ -1052,26 +1055,38 @@ test("rejects unknown Jira Work Log comment variables before calling either API"
   assert.equal(harness.requests.length, 0);
 });
 
-test("requires a positive Toggl project ID before saving settings", async () => {
+test("automatically selects the most-used active project when Project ID is blank", async () => {
   const harness = createHarness({ permissions: [JIRA_MATCH] });
-
-  await assert.rejects(
-    harness.context.handleMessage(
-      {
-        type: "VALIDATE_AND_SAVE_SETTINGS",
-        settings: {
-          jiraOrigin: JIRA_ORIGIN,
-          apiToken: "test-token",
-          projectId: "",
-          descriptionTemplate: "[{key}] {summary}"
-        }
-      },
-      harness.extensionSender("options.html")
-    ),
-    (error) => error?.code === "MISSING_PROJECT_ID"
+  harness.fetchQueue.push(
+    jsonResponse({
+      default_workspace_id: 123,
+      fullname: "Dev QA",
+      projects: [
+        { id: 456, workspace_id: 123, name: "Most used", active: true, actual_hours: 24 },
+        { id: 457, workspace_id: 123, name: "Less used", active: true, actual_hours: 8 },
+        { id: 458, workspace_id: 123, name: "Archived", active: false, actual_hours: 40 }
+      ]
+    }),
+    jsonResponse({ id: 123, name: "Workspace QA" })
   );
 
-  assert.equal(harness.requests.length, 0);
+  const result = await harness.context.handleMessage(
+    {
+      type: "VALIDATE_AND_SAVE_SETTINGS",
+      settings: {
+        jiraOrigin: JIRA_ORIGIN,
+        apiToken: "test-token",
+        projectId: "",
+        descriptionTemplate: "[{key}] {summary}"
+      }
+    },
+    harness.extensionSender("options.html")
+  );
+
+  assert.equal(result.configured, true);
+  assert.equal(result.projectId, 456);
+  assert.equal(result.projectName, "Most used");
+  assert.equal(harness.requests.length, 2);
 });
 
 test("rejects a Toggl project that belongs to a different workspace", async () => {
@@ -1127,7 +1142,7 @@ test("rejects a Toggl project ID that does not exist", async () => {
   );
 });
 
-test("opens Settings after an upgrade when the saved project ID is missing", async () => {
+test("does not force Settings open after an upgrade when Project ID is missing", async () => {
   const harness = createHarness({
     initialSettings: configuredSettings({ projectId: null, projectName: "" }),
     permissions: [JIRA_MATCH]
@@ -1136,27 +1151,36 @@ test("opens Settings after an upgrade when the saved project ID is missing", asy
   harness.listeners.installed({ reason: "update" });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.equal(harness.optionsOpenCount, 1);
+  assert.equal(harness.optionsOpenCount, 0);
 });
 
-test("blocks new timers while upgraded settings are missing a project", async () => {
+test("allows new projectless timers after an upgrade when Project ID is missing", async () => {
   const harness = createHarness({
     initialSettings: configuredSettings({ projectId: null, projectName: "" }),
     permissions: [JIRA_MATCH]
   });
-
-  await assert.rejects(
-    harness.context.handleMessage(
-      { type: "START_MANUAL_TIMER", description: "Blocked work" },
-      harness.extensionSender("popup.html")
-    ),
-    (error) => error?.code === "CONFIG_NOT_SET"
+  harness.fetchQueue.push(
+    jsonResponse(null),
+    jsonResponse({
+      id: 11000,
+      workspace_id: 123,
+      description: "Projectless work",
+      start: "2026-08-20T09:00:00Z",
+      duration: -1
+    })
   );
 
-  assert.equal(harness.requests.length, 0);
+  const result = await harness.context.handleMessage(
+    { type: "START_MANUAL_TIMER", description: "Projectless work" },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(result.action, "started");
+  const body = JSON.parse(harness.requests[1].body);
+  assert.equal(Object.hasOwn(body, "project_id"), false);
 });
 
-test("keeps an upgraded running timer readable and stoppable without a project", async () => {
+test("keeps a projectless profile fully usable for reading and stopping timers", async () => {
   const running = {
     id: 11001,
     workspace_id: 123,
@@ -1176,8 +1200,8 @@ test("keeps an upgraded running timer readable and stoppable without a project",
     harness.extensionSender("popup.html")
   );
 
-  assert.equal(popup.settings.togglConfigured, false);
-  assert.equal(popup.settings.configurationRequired, "project");
+  assert.equal(popup.settings.togglConfigured, true);
+  assert.equal(popup.settings.configurationRequired, "");
   assert.equal(popup.current.id, 11001);
   assert.equal(popup.workedToday.status, "ok");
 

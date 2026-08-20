@@ -110,7 +110,7 @@ function renderWorkspace(settings) {
     (settings.workspaceId ? `Workspace ${settings.workspaceId}` : "Workspace required");
   const project = settings.projectConfigured
     ? settings.projectName || `Project ${settings.projectId}`
-    : "Project required";
+    : "No project";
   workspaceElement.textContent = `${workspace} · ${project}`;
 }
 
@@ -173,14 +173,9 @@ function renderCurrent(entry, settings = currentSettings) {
 }
 
 function configurationMessage(settings, hasRunningTimer) {
-  let message;
-  if (settings?.configurationRequired === "project") {
-    message = "Open Settings and add a valid Toggl project ID before starting a timer.";
-  } else if (settings?.configurationRequired === "workspace") {
-    message = "Open Settings and select a valid Toggl workspace and project.";
-  } else {
-    message = "Open Settings and connect your Toggl account before starting a timer.";
-  }
+  const message = settings?.configurationRequired === "workspace"
+    ? "Open Settings and select a valid Toggl workspace."
+    : "Open Settings and connect your Toggl account before starting a timer.";
 
   return hasRunningTimer
     ? `${message} This running timer can still be stopped.`
@@ -193,7 +188,7 @@ function renderManualDefaults(settings) {
 
   const project = settings.projectName
     ? `Project: ${settings.projectName}`
-    : `Project ID: ${settings.projectId}`;
+    : "No Toggl project selected";
   const jiraNote = settings.jiraConfigured
     ? "You can also start a timer directly from a Jira issue."
     : "Grant Jira access in Settings to use the Jira button.";
@@ -238,11 +233,6 @@ function getJiraProgressLines(insight) {
   const original = originalValue === null || originalValue === undefined
     ? null
     : Math.max(0, Math.floor(Number(originalValue) || 0));
-  const remainingValue = insight?.remainingEstimateSeconds;
-  const remaining = remainingValue === null || remainingValue === undefined
-    ? null
-    : Math.max(0, Math.floor(Number(remainingValue) || 0));
-
   if (original === null) {
     return {
       summary: `${formatWorkedDuration(logged)} logged`,
@@ -258,7 +248,7 @@ function getJiraProgressLines(insight) {
     };
   }
 
-  const left = remaining === null ? Math.max(0, original - logged) : remaining;
+  const left = Math.max(0, original - logged);
   return {
     summary,
     detail: `${formatWorkedDuration(left)} left`

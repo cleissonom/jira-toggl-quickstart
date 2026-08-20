@@ -24,7 +24,7 @@
         <div class="section-heading">
           <div>
             <h2 id="setup-title">Quick setup</h2>
-            <p>Paste your Jira URL and Toggl token, choose the required Toggl project, then save.</p>
+            <p>Paste your Jira URL and Toggl token, optionally choose a Toggl project, then save.</p>
           </div>
           <span id="connection-badge" class="badge">Not configured</span>
         </div>
@@ -68,10 +68,7 @@
             </label>
 
             <label class="field project-field">
-              <span>
-                Toggl project ID
-                <strong class="required-indicator" aria-label="required">*</strong>
-              </span>
+              <span>Toggl project ID <em>(optional)</em></span>
               <input
                 id="project-id"
                 name="projectId"
@@ -79,12 +76,11 @@
                 min="1"
                 step="1"
                 inputmode="numeric"
-                required
-                placeholder="Enter the project used for every timer"
+                placeholder="Automatically select your most-used active project"
               />
               <small>
-                Required. The project must exist in the selected or default workspace.
-                Every timer created by the extension is assigned to it.
+                Leave blank to select the active project in the workspace with the highest
+                <code>actual_hours</code>. If no active project is available, timers are created without one.
               </small>
             </label>
           </div>
@@ -127,11 +123,10 @@
                 <label class="field">
                   <span>Duration rounding</span>
                   <select id="worklog-rounding" name="worklogRounding">
-                    <option value="exact">Exact duration in seconds</option>
                     <option value="nearest-minute">Nearest minute</option>
                     <option value="ceil-minute">Round up to the next minute</option>
                   </select>
-                  <small>The Jira remaining estimate is always left unchanged.</small>
+                  <small>Creating the Work Log automatically reduces Jira's remaining estimate.</small>
                 </label>
               </div>
 
@@ -238,11 +233,11 @@
             <strong id="data-use-title">How your data is used</strong>
             <p>
               The extension reads your Toggl entries for the current browser-local day to show
-              Worked today, and uses your required project ID for every timer it creates. For an
+              Worked today, and can automatically choose your most-used active project. For an
               identified Jira timer, it reads the issue summary, description, logged time, and
               estimates to show progress locally. Jira title and description are copied only after
               you click the copy button. If Work Log sync is enabled, the stopped duration, start
-              time, issue key, and configured comment are sent to your Jira site. Retry records stay
+              time, issue key, and configured comment are sent to your Jira site, where the remaining estimate is adjusted automatically. Retry records stay
               in this Chrome profile. Nothing is sent to the extension developer.
             </p>
           </aside>

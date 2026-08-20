@@ -339,10 +339,7 @@
     const shouldStop = Boolean(state.timerStatus?.isCurrentIssue);
     if (!shouldStop && state.timerStatus?.configured === false) {
       await sendMessage({ type: "OPEN_OPTIONS" });
-      const message = state.timerStatus?.configurationRequired === "project"
-        ? "Add a valid Toggl project ID in the Settings tab that was opened."
-        : "Complete the extension setup in the tab that was opened.";
-      showMessage(message);
+      showMessage("Complete the extension setup in the tab that was opened.");
       return;
     }
 
@@ -452,12 +449,8 @@
     if (state.timerStatus?.configured === false) {
       ui.button.classList.add("config");
       ui.icon.textContent = "⚙";
-      ui.label.textContent = state.timerStatus?.configurationRequired === "project"
-        ? "Configure project"
-        : "Configure extension";
-      ui.button.title = state.timerStatus?.configurationRequired === "project"
-        ? "A valid Toggl project ID is required before starting a timer"
-        : "Open the extension settings";
+      ui.label.textContent = "Configure extension";
+      ui.button.title = "Open the extension settings";
       return;
     }
 

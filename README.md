@@ -23,7 +23,7 @@ For a Jira issue such as `PROJ-123 — Improve the onboarding workflow`, the def
 - Optional one-way synchronization from completed Toggl timers to Jira Work Logs.
 - Automatic Work Log creation or confirmation from the extension popup.
 - Local retry queue for failed Work Log requests and duplicate prevention through a Jira Work Log property.
-- Exact duration, nearest-minute, or round-up duration handling for Jira Work Logs.
+- Nearest-minute or round-up duration handling for Jira Work Logs.
 - Manual timer field in the extension popup when no timer is running.
 - Compact **Worked today** total for the browser-local calendar day, including completed and running Toggl entries from every project and workspace.
 - Jira logged-time progress against the original estimate for the currently running Jira-linked timer.
@@ -31,7 +31,7 @@ For a Jira issue such as `PROJ-123 — Improve the onboarding workflow`, the def
 - Configurable Jira site; paste a site, board, backlog, or issue URL.
 - Runtime permission for the exact configured Jira origin instead of a company-specific hard-coded URL.
 - Configurable **Billable** default for every time entry created by the extension.
-- Automatic default-workspace detection and a required Toggl project validated against that workspace.
+- Automatic default-workspace detection and an optional Toggl project, with automatic selection of the most-used active project.
 - Custom Jira description templates with fourteen supported variables.
 - Optional automatic switching: stop the current timer before starting a different one.
 - English UI, source code, comments, tests, and documentation.
@@ -54,11 +54,11 @@ The main settings form keeps the common choices visible:
 
 1. **Jira site URL** — paste any URL from the Jira site. The extension normalizes it to its HTTPS origin.
 2. **Toggl Track API token** — use the direct **Open the Toggl API Token page** link below the field.
-3. **Toggl project ID** — required. Every timer created by the extension is assigned to this project.
+3. **Toggl project ID** — optional. Leave it blank to select the active project in the workspace with the highest `actual_hours`.
 4. **Billable time entries** — choose whether timers created by the extension should be billable by default.
 5. **Jira Work Logs** — optionally create a Work Log when a timer started from the Jira button stops.
 
-Click **Connect and save**. The extension requests access only to the exact Jira origin entered, validates the Toggl token, detects or checks the selected workspace, verifies that the project exists in that workspace, and registers its Jira content script. It never chooses a project silently.
+Click **Connect and save**. The extension requests access only to the exact Jira origin entered, validates the Toggl token, detects or checks the selected workspace, reads related Toggl project data, and registers its Jira content script. An entered project ID is validated against the workspace. When the field is blank, the extension selects the active project in that workspace with the highest `actual_hours`; if none exists, timers remain usable without a project.
 
 The collapsed **Advanced settings** section contains:
 
@@ -80,17 +80,17 @@ The collapsed **Advanced settings** section contains:
 2. When no timer is running, type a description in **What are you working on?**.
 3. Click **Start timer** or press Enter.
 
-Manual timers use the same saved workspace, required project, Billable default, and automatic-switching behavior as Jira timers. They are intentionally Toggl-only and are not associated with a Jira Work Log.
+Manual timers use the same saved workspace, optional selected project, Billable default, and automatic-switching behavior as Jira timers. They are intentionally Toggl-only and are not associated with a Jira Work Log.
 
 ### Use the popup insights
 
 The popup shows **Worked today** for the current browser-local calendar day. It requests the current user's Toggl entries from local midnight through the current time, includes completed entries from every project and workspace, and adds the elapsed portion of the running entry without double-counting it. While the popup remains open, a running total advances locally after the initial request rather than repeatedly polling Toggl.
 
-When the current Toggl entry is linked to a Jira issue, the popup also shows Jira's actual logged time against the original estimate. It displays remaining time when available, or a positive over-estimate amount when logged time exceeds the original estimate. Missing estimates and Jira API failures are shown without disabling the Stop timer action.
+When the current Toggl entry is linked to a Jira issue, the popup also shows Jira's actual logged time against the original estimate. Time left is calculated as original estimate minus logged time, while a positive over-estimate amount is shown when logged time exceeds the original estimate. Missing estimates and Jira API failures are shown without disabling the Stop timer action.
 
 After Jira details load, **Copy Jira title & description** creates a Markdown document containing the issue key, summary, and description. Jira Cloud Atlassian Document Format is converted locally; plain-string descriptions are also supported. Clipboard access occurs only after the user clicks the button.
 
-Users upgrading from v0.4.0 without a saved project ID are directed to Settings. New timers remain blocked until the project is validated, but an already-running timer can still be read and stopped.
+Users upgrading from v0.5.0 keep any saved project. Profiles without a project can start timers normally; opening and saving Settings can populate the project automatically when related Toggl data contains an eligible active project.
 
 ## Jira Work Log synchronization
 
@@ -107,11 +107,10 @@ Available behavior:
 
 - **Automatic** — attempt the Jira Work Log as soon as the timer stops.
 - **Ask before syncing** — keep the completed entry pending until **Sync pending Work Logs** is clicked in the popup.
-- **Exact duration** — send the Toggl duration in seconds.
-- **Nearest minute** or **round up** — apply the selected rounding rule before sending the duration to Jira.
+- **Nearest minute** or **round up** — apply the selected rounding rule before sending the duration to Jira. Existing exact-second settings migrate to nearest-minute rounding.
 - **Comment template** — use `{description}`, `{issueKey}`, and `{togglId}`, or leave it blank.
 
-The extension always uses `adjustEstimate=leave`, so creating a Work Log does not change the Jira remaining estimate. Failed requests remain in a local retry queue. A custom property containing the Toggl time-entry ID is attached to the Jira Work Log and checked before creation to reduce duplicate submissions.
+The extension uses Jira's automatic estimate adjustment when creating a Work Log, so the logged duration reduces the remaining estimate in the same way as Jira's normal Work Log flow. Failed requests remain in a local retry queue. A custom property containing the Toggl time-entry ID is attached to the Jira Work Log and checked before creation to reduce duplicate submissions.
 
 Requirements on the Jira side:
 
@@ -119,7 +118,7 @@ Requirements on the Jira side:
 - Jira time tracking must be enabled.
 - The user needs **Browse projects** and **Work on issues** permission for the target issue.
 
-Version 0.5 performs one-way creation from Toggl to Jira. Later edits or deletions made to an already-synchronized Toggl entry or Jira Work Log are not synchronized bidirectionally.
+Version 0.5.1 performs one-way creation from Toggl to Jira. Later edits or deletions made to an already-synchronized Toggl entry or Jira Work Log are not synchronized bidirectionally.
 
 ## Description template variables
 
@@ -171,7 +170,7 @@ Manifest V3 service worker
     │
     ├── validates the configured Jira origin or trusted extension page
     ├── reads protected local settings and Work Log associations
-    ├── starts, reads, and stops Toggl time entries with the required project
+    ├── starts, reads, and stops Toggl time entries with an optional selected project
     ├── aggregates the current local day's Toggl time for the popup
     ├── reads Jira summary, description, and time-tracking fields for the active issue
     ├── converts Jira ADF to Markdown only in the trusted popup flow
@@ -185,7 +184,7 @@ The content script tries Jira REST API versions `3`, `2`, and `latest`, then fal
 
 ### Required permissions
 
-- `storage` — saves the token, required workspace/project configuration, preferences, Jira-linked timer associations, and pending Work Log retry records in the current Chrome profile.
+- `storage` — saves the token, workspace and optional project configuration, preferences, Jira-linked timer associations, and pending Work Log retry records in the current Chrome profile.
 - `scripting` — dynamically registers `content.js` for the configured Jira site.
 - `https://api.track.toggl.com/*` — calls the Toggl Track API.
 
@@ -213,7 +212,7 @@ No package installation is required. Run:
 npm run validate
 ```
 
-This command checks JavaScript syntax, validates `manifest.json`, and runs mocked service-worker, popup, and UI contract tests, including required-project validation, local-day totals, running-entry semantics, Jira progress, ADF-to-Markdown conversion, clipboard states, Work Log creation, retries, duplicate prevention, external-stop reconciliation, and icon dimensions.
+This command checks JavaScript syntax, validates `manifest.json`, and runs mocked service-worker, popup, and UI contract tests, including optional and automatic project selection, local-day totals, running-entry semantics, Jira progress, ADF-to-Markdown conversion, clipboard states, Work Log creation, retries, duplicate prevention, external-stop reconciliation, and icon dimensions.
 
 ## Project structure
 
@@ -241,7 +240,7 @@ LICENSE             MIT license
   - `POST /rest/api/{version}/issue/{issueKey}/worklog`
   - Jira Work Log properties for Toggl-entry duplicate detection
 - Toggl Track API v9:
-  - `GET /api/v9/me`
+  - `GET /api/v9/me?with_related_data=true`
   - `GET /api/v9/workspaces/{workspace_id}`
   - `GET /api/v9/workspaces/{workspace_id}/projects/{project_id}`
   - `GET /api/v9/me/time_entries/current`
@@ -271,7 +270,7 @@ Official references:
 
 - [RELEASING.md](RELEASING.md) describes versioning, tags, and automated GitHub releases.
 - [STORE_LISTING.md](STORE_LISTING.md) contains the Chrome Web Store description, permission justifications, and privacy declarations.
-- A tag such as `v0.5.0` triggers the release workflow, which validates the source and creates a minimal Chrome Web Store ZIP plus its SHA-256 checksum.
+- A tag such as `v0.5.1` triggers the release workflow, which validates the source and creates a minimal Chrome Web Store ZIP plus its SHA-256 checksum.
 
 ## Contributing
 

@@ -8,8 +8,8 @@
 - The Jira page cannot choose arbitrary network destinations for the service worker.
 - All Toggl and Jira API paths are constructed by extension code.
 - Jira requests are constrained to the single HTTPS origin approved by the user.
-- The required Toggl project ID must be a positive integer and is verified through the workspace-scoped Toggl API before settings are accepted.
-- Every time entry created by the extension includes the validated `project_id`; the extension never silently selects a project.
+- An explicitly entered Toggl project ID must be a positive integer and is verified through the workspace-scoped Toggl API before settings are accepted.
+- Automatic project selection considers only active related projects in the selected workspace and chooses the highest `actual_hours`; timers omit `project_id` when no eligible project exists.
 - Jira issue values, manual descriptions, Work Log comments, IDs, and durations are normalized, length-limited, or validated before use.
 - Unknown timer-description and Work Log-comment variables are rejected when settings are saved.
 - Popup Jira insight lookup uses the existing protected association first and only then applies a conservative Jira-key pattern to the current Toggl description.
@@ -17,7 +17,7 @@
 - The ADF-to-Markdown converter is local, processes unknown nodes through child content, and does not execute Jira HTML or remote code.
 - Clipboard writing occurs only from the explicit popup button click through `navigator.clipboard.writeText()`; no broad clipboard permission is requested.
 - The raw Toggl entries used for **Worked today** are aggregated in the service worker and are neither persisted nor returned to untrusted contexts.
-- Work Log synchronization uses a locally stored Toggl-entry association and a Jira Work Log property to reduce duplicate submissions.
+- Work Log synchronization uses a locally stored Toggl-entry association and a Jira Work Log property to reduce duplicate submissions, and asks Jira to adjust the remaining estimate automatically.
 - Failed Work Log requests are retained locally for explicit retry instead of being sent to another service.
 - Daily-total, Jira-progress, and clipboard failures are isolated from the primary timer controls, so an existing timer remains stoppable.
 - The Toggl token is never included in Jira requests, Work Log comments, Work Log properties, or clipboard content.
@@ -34,7 +34,7 @@ Pending Work Log records can contain Jira issue keys, rendered timer description
 
 Jira issue insights and Work Log synchronization rely on the Jira session already active in Chrome. The Jira server remains responsible for authentication, issue-level security, field visibility, time-tracking configuration, and the **Browse projects** and **Work on issues** permissions. A failed Jira request does not prevent the Toggl timer from being stopped.
 
-An already-running Toggl entry remains readable and stoppable after an upgrade even when the newly required project setting is incomplete. Starting a new Jira or manual timer remains blocked until the project has been validated.
+Project selection is optional. A manually entered project is validated, an eligible project may be selected automatically from related Toggl data, and timers remain usable without a project when none is available.
 
 ## Reporting a vulnerability
 

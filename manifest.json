@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Jira → Toggl Quick Start",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Start Toggl timers from Jira with daily totals, Jira progress, and optional Work Log sync.",
   "minimum_chrome_version": "102",
   "permissions": [

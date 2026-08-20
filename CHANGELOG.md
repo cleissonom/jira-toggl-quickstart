@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1 — 2026-08-20
+
+- Made the Toggl project ID optional again and added automatic selection from the related project data returned by Toggl.
+- When the project field is blank, selects the active project in the chosen workspace with the highest `actual_hours`; timers remain projectless when no active project is available.
+- Removed exact-second Jira Work Log durations and migrated the legacy exact setting to nearest-minute rounding.
+- Fixed Jira progress so the displayed time left is calculated from original estimate minus logged time.
+- Changed synchronized Work Logs to let Jira automatically reduce the remaining estimate, matching Jira's normal Work Log behavior.
+- Updated settings text, migration behavior, tests, and release metadata for version 0.5.1.
+
 ## 0.5.0 — 2026-08-20
 
 - Made the Toggl project ID required, moved it into Quick Setup, and added API validation that the project exists in the selected workspace.

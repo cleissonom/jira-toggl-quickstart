@@ -58,7 +58,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   stopExisting: true,
   syncWorklogs: false,
   worklogSyncMode: "automatic",
-  worklogRounding: "exact",
+  worklogRounding: "nearest-minute",
   worklogCommentTemplate: "Synced from Toggl: {description}"
 });
 
@@ -267,7 +267,7 @@ function toPublicSettings(settings, jiraPermissionGranted = false) {
   const workspaceConfigured = isPositiveInteger(settings.workspaceId);
   const projectConfigured = isPositiveInteger(settings.projectId);
   const togglConnected = hasApiToken && workspaceConfigured;
-  const togglConfigured = togglConnected && projectConfigured;
+  const togglConfigured = togglConnected;
   const jiraConfigured = Boolean(settings.jiraOrigin && jiraPermissionGranted);
 
   let configurationRequired = "";
@@ -275,8 +275,6 @@ function toPublicSettings(settings, jiraPermissionGranted = false) {
     configurationRequired = "api-token";
   } else if (!workspaceConfigured) {
     configurationRequired = "workspace";
-  } else if (!projectConfigured) {
-    configurationRequired = "project";
   } else if (!jiraConfigured) {
     configurationRequired = "jira";
   }
@@ -344,7 +342,7 @@ async function validateAndSaveSettings(input) {
     candidate.workspaceId,
     "Workspace ID"
   );
-  const projectId = normalizeRequiredPositiveInteger(
+  const requestedProjectId = normalizeOptionalPositiveInteger(
     candidate.projectId,
     "Toggl project ID"
   );
@@ -358,7 +356,7 @@ async function validateAndSaveSettings(input) {
     candidate.worklogCommentTemplate
   );
 
-  const me = await togglRequest("/api/v9/me", { apiToken });
+  const me = await togglRequest("/api/v9/me?with_related_data=true", { apiToken });
   const workspaceId =
     requestedWorkspaceId ||
     normalizeOptionalPositiveInteger(me?.default_workspace_id, "Default workspace ID");
@@ -371,34 +369,25 @@ async function validateAndSaveSettings(input) {
   }
 
   const workspace = await togglRequest(`/api/v9/workspaces/${workspaceId}`, { apiToken });
-  const project = await togglRequest(
-    `/api/v9/workspaces/${workspaceId}/projects/${projectId}`,
-    { apiToken }
-  );
-  const returnedProjectId = Number(project?.id || 0);
-  const projectWorkspaceId = Number(
-    project?.workspace_id || project?.workspaceId || project?.wid || 0
-  );
+  let project = null;
+  let projectId = requestedProjectId;
 
-  if (returnedProjectId && returnedProjectId !== projectId) {
-    throw new UserFacingError(
-      "TOGGL_PROJECT_MISMATCH",
-      "Toggl returned a different project than the one requested. Check the project ID."
+  if (requestedProjectId) {
+    project = await togglRequest(
+      `/api/v9/workspaces/${workspaceId}/projects/${requestedProjectId}`,
+      { apiToken }
     );
+    validateSelectedProject(project, requestedProjectId, workspaceId);
+  } else {
+    project = selectAutomaticProject(getRelatedProjects(me), workspaceId);
+    projectId = project ? Number(project.id) : null;
   }
 
-  if (projectWorkspaceId && projectWorkspaceId !== workspaceId) {
-    throw new UserFacingError(
-      "TOGGL_PROJECT_WORKSPACE_MISMATCH",
-      "The Toggl project does not belong to the selected workspace."
-    );
-  }
-
-  const projectName = String(project?.name || "").trim();
-  if (!projectName) {
+  const projectName = project ? String(project.name || "").trim() : "";
+  if (project && !projectName) {
     throw new UserFacingError(
       "TOGGL_PROJECT_INVALID",
-      "Toggl did not return a valid project for that workspace and project ID."
+      "Toggl did not return a valid name for the selected project."
     );
   }
 
@@ -436,6 +425,76 @@ async function validateAndSaveSettings(input) {
   }
 
   return toPublicSettings(settings, true);
+}
+
+function getRelatedProjects(me) {
+  const projects = [
+    ...(Array.isArray(me?.projects) ? me.projects : [])
+  ];
+
+  for (const workspace of Array.isArray(me?.workspaces) ? me.workspaces : []) {
+    projects.push(...(Array.isArray(workspace?.projects) ? workspace.projects : []));
+  }
+
+  return projects;
+}
+
+function getProjectWorkspaceId(project) {
+  const value = Number(
+    project?.workspace_id || project?.workspaceId || project?.wid || 0
+  );
+  return isPositiveInteger(value) ? value : null;
+}
+
+function selectAutomaticProject(projects, workspaceId) {
+  let selected = null;
+  let highestActualHours = -Infinity;
+
+  for (const project of Array.isArray(projects) ? projects : []) {
+    if (
+      project?.active !== true ||
+      !isPositiveInteger(project?.id) ||
+      !String(project?.name || "").trim() ||
+      getProjectWorkspaceId(project) !== workspaceId
+    ) {
+      continue;
+    }
+
+    const actualHours = Number(project.actual_hours);
+    const score = Number.isFinite(actualHours) && actualHours >= 0 ? actualHours : 0;
+    if (!selected || score > highestActualHours) {
+      selected = project;
+      highestActualHours = score;
+    }
+  }
+
+  return selected;
+}
+
+function validateSelectedProject(project, requestedProjectId, workspaceId) {
+  const returnedProjectId = Number(project?.id || 0);
+  const projectWorkspaceId = getProjectWorkspaceId(project);
+
+  if (returnedProjectId !== requestedProjectId) {
+    throw new UserFacingError(
+      "TOGGL_PROJECT_MISMATCH",
+      "Toggl returned a different project than the one requested. Check the project ID."
+    );
+  }
+
+  if (projectWorkspaceId && projectWorkspaceId !== workspaceId) {
+    throw new UserFacingError(
+      "TOGGL_PROJECT_WORKSPACE_MISMATCH",
+      "The Toggl project does not belong to the selected workspace."
+    );
+  }
+
+  if (!String(project?.name || "").trim()) {
+    throw new UserFacingError(
+      "TOGGL_PROJECT_INVALID",
+      "Toggl did not return a valid project for that workspace and project ID."
+    );
+  }
 }
 
 async function clearSettings() {
@@ -556,11 +615,14 @@ async function startDescriptionTimer(description, settings, issue = null) {
     created_with: CREATED_WITH,
     description,
     duration: -1,
-    project_id: settings.projectId,
     start: new Date().toISOString(),
     stop: null,
     workspace_id: settings.workspaceId
   };
+
+  if (isPositiveInteger(settings.projectId)) {
+    body.project_id = settings.projectId;
+  }
 
   const created = await togglRequest(
     `/api/v9/workspaces/${settings.workspaceId}/time_entries`,
@@ -640,7 +702,7 @@ async function getConfiguredTogglSettings() {
   if (!hasStartConfiguration(settings)) {
     throw new UserFacingError(
       "CONFIG_NOT_SET",
-      "Configure your Toggl API token, workspace, and Toggl project ID before starting a timer."
+      "Configure your Toggl API token and workspace before starting a timer."
     );
   }
 
@@ -1646,7 +1708,7 @@ async function createJiraWorklog(record, settings) {
 
     return {
       method: "POST",
-      path: `/rest/api/${apiVersion}/issue/${encodeURIComponent(record.issueKey)}/worklog?adjustEstimate=leave&notifyUsers=false`,
+      path: `/rest/api/${apiVersion}/issue/${encodeURIComponent(record.issueKey)}/worklog?adjustEstimate=auto&notifyUsers=false`,
       body
     };
   });
@@ -1825,15 +1887,11 @@ function toAtlassianDocument(text) {
 function applyWorklogRounding(durationSeconds, rounding) {
   const seconds = Math.max(1, Math.floor(Number(durationSeconds) || 0));
 
-  if (rounding === "nearest-minute") {
-    return Math.max(60, Math.round(seconds / 60) * 60);
-  }
-
   if (rounding === "ceil-minute") {
     return Math.max(60, Math.ceil(seconds / 60) * 60);
   }
 
-  return seconds;
+  return Math.max(60, Math.round(seconds / 60) * 60);
 }
 
 function formatJiraStarted(value) {
@@ -2172,7 +2230,10 @@ function coerceWorklogSyncMode(value) {
 
 function normalizeWorklogRounding(value) {
   const rounding = String(value || DEFAULT_SETTINGS.worklogRounding);
-  if (!["exact", "nearest-minute", "ceil-minute"].includes(rounding)) {
+  if (rounding === "exact") {
+    return "nearest-minute";
+  }
+  if (!["nearest-minute", "ceil-minute"].includes(rounding)) {
     throw new UserFacingError(
       "INVALID_WORKLOG_ROUNDING",
       "Choose a valid Jira Work Log rounding option."
@@ -2182,7 +2243,10 @@ function normalizeWorklogRounding(value) {
 }
 
 function coerceWorklogRounding(value) {
-  return ["exact", "nearest-minute", "ceil-minute"].includes(value)
+  if (value === "exact") {
+    return "nearest-minute";
+  }
+  return ["nearest-minute", "ceil-minute"].includes(value)
     ? value
     : DEFAULT_SETTINGS.worklogRounding;
 }
@@ -2341,16 +2405,6 @@ function scheduleContentScriptSync() {
   });
 }
 
-function normalizeRequiredPositiveInteger(value, fieldName) {
-  const number = normalizeOptionalPositiveInteger(value, fieldName);
-  if (!number) {
-    throw new UserFacingError(
-      "MISSING_PROJECT_ID",
-      `Enter a ${fieldName}.`
-    );
-  }
-  return number;
-}
 
 function isPositiveInteger(value) {
   const number = Number(value);
@@ -2360,8 +2414,7 @@ function isPositiveInteger(value) {
 function hasStartConfiguration(settings) {
   return Boolean(
     settings?.apiToken &&
-    isPositiveInteger(settings.workspaceId) &&
-    isPositiveInteger(settings.projectId)
+    isPositiveInteger(settings.workspaceId)
   );
 }
 

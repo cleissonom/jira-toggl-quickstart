@@ -93,7 +93,7 @@ function applySettings(settings) {
   stopExistingInput.checked = settings.stopExisting !== false;
   syncWorklogsInput.checked = settings.syncWorklogs === true;
   worklogSyncModeInput.value = settings.worklogSyncMode || "automatic";
-  worklogRoundingInput.value = settings.worklogRounding || "exact";
+  worklogRoundingInput.value = settings.worklogRounding || "nearest-minute";
   worklogCommentTemplateInput.value = settings.worklogCommentTemplate ??
     "Synced from Toggl: {description}";
   apiTokenInput.required = !settings.hasApiToken;
@@ -123,8 +123,6 @@ function applySettings(settings) {
       ? `Ready · ${settings.workspaceName}${project}`
       : "Ready";
     connectionBadge.classList.add("connected");
-  } else if (settings.configurationRequired === "project") {
-    connectionBadge.textContent = "Toggl project required";
   } else if (settings.togglConfigured && !settings.jiraConfigured) {
     connectionBadge.textContent = "Jira access needed";
   } else {
@@ -170,7 +168,7 @@ async function saveSettings() {
     return;
   }
 
-  showStatus("Checking your Toggl account, workspace, and project…");
+  showStatus("Checking your Toggl account, workspace, and optional project…");
 
   const response = await sendMessage({
     type: "VALIDATE_AND_SAVE_SETTINGS",
@@ -246,7 +244,7 @@ async function clearSettings() {
   stopExistingInput.checked = true;
   syncWorklogsInput.checked = false;
   worklogSyncModeInput.value = "automatic";
-  worklogRoundingInput.value = "exact";
+  worklogRoundingInput.value = "nearest-minute";
   worklogCommentTemplateInput.value = "Synced from Toggl: {description}";
   pendingWorklogs.classList.add("hidden");
   advancedSettings.open = false;
