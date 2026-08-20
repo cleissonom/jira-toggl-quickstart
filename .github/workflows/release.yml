@@ -62,6 +62,6 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             "$archive" \
             "${archive}.sha256" \
-            --title "Jira → Toggl Quick Start ${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             --verify-tag
