@@ -336,16 +336,18 @@
       return;
     }
 
-    if (state.timerStatus?.configured === false) {
+    const shouldStop = Boolean(state.timerStatus?.isCurrentIssue);
+    if (!shouldStop && state.timerStatus?.configured === false) {
       await sendMessage({ type: "OPEN_OPTIONS" });
-      showMessage("Complete the extension setup in the tab that was opened.");
+      const message = state.timerStatus?.configurationRequired === "project"
+        ? "Add a valid Toggl project ID in the Settings tab that was opened."
+        : "Complete the extension setup in the tab that was opened.";
+      showMessage(message);
       return;
     }
 
     state.busy = true;
     render();
-
-    const shouldStop = Boolean(state.timerStatus?.isCurrentIssue);
     const response = await sendMessage({
       type: shouldStop ? "STOP_TIMER" : "START_TIMER",
       issue: state.issue
@@ -439,19 +441,23 @@
       return;
     }
 
-    if (state.timerStatus?.configured === false) {
-      ui.button.classList.add("config");
-      ui.icon.textContent = "⚙";
-      ui.label.textContent = "Configure extension";
-      ui.button.title = "Open the extension settings";
-      return;
-    }
-
     if (state.timerStatus?.isCurrentIssue) {
       ui.button.classList.add("running");
       ui.icon.textContent = "■";
       ui.label.textContent = "Stop in Toggl";
       ui.button.title = state.timerStatus.description || "Stop the timer for this issue";
+      return;
+    }
+
+    if (state.timerStatus?.configured === false) {
+      ui.button.classList.add("config");
+      ui.icon.textContent = "⚙";
+      ui.label.textContent = state.timerStatus?.configurationRequired === "project"
+        ? "Configure project"
+        : "Configure extension";
+      ui.button.title = state.timerStatus?.configurationRequired === "project"
+        ? "A valid Toggl project ID is required before starting a timer"
+        : "Open the extension settings";
       return;
     }
 

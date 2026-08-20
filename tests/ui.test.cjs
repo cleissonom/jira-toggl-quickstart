@@ -86,9 +86,10 @@ test("settings page prominently discloses Jira-to-Toggl data use before saving",
 
   assert.ok(disclosureIndex >= 0, "expected a visible data-use disclosure");
   assert.ok(saveIndex > disclosureIndex, "disclosure should appear before the save action");
-  assert.match(html, /reads only the issue fields needed by\s+your description template/i);
-  assert.match(html, /sends the resulting timer description/i);
-  assert.match(html, /Nothing is\s+sent to the extension developer/i);
+  assert.match(html, /Toggl entries for the current browser-local day/i);
+  assert.match(html, /issue summary, description, logged time, and\s+estimates/i);
+  assert.match(html, /copied only after\s+you click the copy button/i);
+  assert.match(html, /Nothing is sent to the extension developer/i);
 });
 
 test("manifest and package versions stay aligned", () => {
@@ -150,8 +151,8 @@ test("Work Log data use is disclosed before settings are saved", () => {
   assert.ok(disclosureIndex >= 0);
   assert.ok(saveIndex > disclosureIndex);
   assert.match(html, /If Work Log sync is enabled/i);
-  assert.match(html, /stopped duration, start time/i);
-  assert.match(html, /Retry records stay in\s+this Chrome profile/i);
+  assert.match(html, /stopped duration, start\s+time/i);
+  assert.match(html, /Retry records stay\s+in this Chrome profile/i);
 });
 
 test("all extension HTML ids are unique", () => {
@@ -179,12 +180,13 @@ test("the replacement extension icons are valid PNGs at every manifest size", ()
   assert.match(read("popup.html"), /src="icons\/icon32\.png"/);
 });
 
-test("release metadata is set to version 0.4.0", () => {
+test("release metadata is set to version 0.5.0", () => {
   const manifest = JSON.parse(read("manifest.json"));
   const packageJson = JSON.parse(read("package.json"));
-  assert.equal(manifest.version, "0.4.0");
-  assert.equal(packageJson.version, "0.4.0");
-  assert.match(manifest.description, /Jira Work Logs/);
+  assert.equal(manifest.version, "0.5.0");
+  assert.equal(packageJson.version, "0.5.0");
+  assert.match(manifest.description, /daily totals/i);
+  assert.match(read(".github/ISSUE_TEMPLATE/bug_report.yml"), /placeholder: 0\.5\.0/);
 });
 
 test("extension stylesheets have balanced blocks and one Work Log settings block", () => {
@@ -199,4 +201,102 @@ test("extension stylesheets have balanced blocks and one Work Log settings block
 
   const optionsCss = read("options.css");
   assert.equal((optionsCss.match(/\.worklog-card\s*\{/g) || []).length, 1);
+});
+
+test("Toggl project ID is visibly required in Quick Setup rather than Advanced settings", () => {
+  const html = read("options.html");
+  const projectIndex = html.indexOf('id="project-id"');
+  const advancedIndex = html.indexOf('id="advanced-settings"');
+
+  assert.ok(projectIndex >= 0);
+  assert.ok(projectIndex < advancedIndex, "project ID should appear before Advanced settings");
+  assert.match(html, /Toggl project ID/);
+  assert.match(html, /required-indicator/);
+  assert.match(html, /id="project-id"[\s\S]*?min="1"[\s\S]*?required/);
+  assert.doesNotMatch(html, /Fixed Toggl project ID\s*<em>\(optional\)/);
+});
+
+test("popup presents daily total and Jira details in the requested compact order", () => {
+  const html = read("popup.html");
+  const order = [
+    'id="worked-today"',
+    'id="timer"',
+    'id="jira-progress"',
+    'id="copy-jira"',
+    'id="stop"',
+    'id="worklogs"',
+    'id="settings"'
+  ].map((marker) => html.indexOf(marker));
+
+  for (const index of order) {
+    assert.ok(index >= 0);
+  }
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  assert.match(html, /Worked today/);
+  assert.match(html, /Jira progress/);
+  assert.match(html, /Copy Jira title &amp; description/);
+});
+
+test("popup keeps live daily totals local and refreshes after timer changes", () => {
+  const script = read("popup.js");
+  assert.match(script, /getLiveWorkedTodaySeconds/);
+  assert.match(script, /calculatedAt/);
+  assert.match(script, /window\.setInterval\(updateLiveValues, 1000\)/);
+  assert.match(script, /await loadState\(\);\n  showWorklogResult\(worklogResult/);
+  assert.match(script, /await loadState\(\);\n  if \(previousResult\)/);
+});
+
+test("Jira copy uses the explicit clipboard API without a broad permission", () => {
+  const manifest = JSON.parse(read("manifest.json"));
+  const script = read("popup.js");
+
+  assert.doesNotMatch(JSON.stringify(manifest.permissions), /clipboard/i);
+  assert.match(script, /navigator\.clipboard\.writeText\(currentJiraInsight\.clipboardText\)/);
+  assert.match(script, /Copied to clipboard/);
+  assert.match(script, /Check clipboard access and try again/);
+});
+
+test("Jira pages can still stop the current issue when project setup is incomplete", () => {
+  const script = read("content.js");
+  const stopIndex = script.indexOf('const shouldStop = Boolean(state.timerStatus?.isCurrentIssue)');
+  const configureIndex = script.indexOf('if (!shouldStop && state.timerStatus?.configured === false)');
+  const renderStopIndex = script.indexOf('if (state.timerStatus?.isCurrentIssue)', script.indexOf('function render()'));
+  const renderConfigureIndex = script.indexOf('if (state.timerStatus?.configured === false)', script.indexOf('function render()'));
+
+  assert.ok(stopIndex >= 0 && configureIndex > stopIndex);
+  assert.ok(renderStopIndex >= 0 && renderConfigureIndex > renderStopIndex);
+  assert.match(script, /A valid Toggl project ID is required before starting a timer/);
+});
+
+test("release documentation describes the v0.5.0 data flows and required project", () => {
+  const readme = read("README.md");
+  const privacy = read("PRIVACY.md");
+  const security = read("SECURITY.md");
+  const store = read("STORE_LISTING.md");
+  const changelog = read("CHANGELOG.md");
+  const releasing = read("RELEASING.md");
+
+  assert.match(changelog, /## 0\.5\.0 — 2026-08-20/);
+  assert.match(readme, /required Toggl project/);
+  assert.match(readme, /Worked today/);
+  assert.match(readme, /Jira's actual logged time/);
+  assert.match(privacy, /current user's entries from browser-local midnight/);
+  assert.match(privacy, /summary, description, logged time, original estimate, and remaining estimate/);
+  assert.match(privacy, /only after the user explicitly clicks/);
+  assert.match(security, /no remote JavaScript, `eval`, `new Function`/);
+  assert.match(store, /No clipboard permission is requested/);
+  assert.match(releasing, /v0\.5\.0/);
+});
+
+test("documentation no longer describes the Toggl project as optional", () => {
+  const combined = [
+    "README.md",
+    "PRIVACY.md",
+    "SECURITY.md",
+    "STORE_LISTING.md",
+    "RELEASING.md"
+  ].map(read).join("\n");
+
+  assert.doesNotMatch(combined, /optional (?:fixed )?(?:Toggl )?project/i);
+  assert.doesNotMatch(combined, /fixed Toggl project/i);
 });

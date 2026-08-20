@@ -8,8 +8,18 @@ const CREATED_WITH = "jira-toggl-quickstart-chrome";
 const WORKLOG_PROPERTY_KEY = "jira-toggl-quickstart";
 const WORKLOG_STATE_VERSION = 1;
 const MAX_WORKLOG_RECORDS = 200;
+const MIN_PLAUSIBLE_UNIX_SECONDS = 1_000_000_000;
 const WORKLOG_RECONCILE_LIMIT = 5;
 const WORKLOG_API_VERSIONS = Object.freeze(["3", "2", "latest"]);
+const JIRA_ISSUE_KEY_PATTERN = /\b([A-Z][A-Z0-9_]*-\d+)\b/i;
+const JIRA_INSIGHT_FIELDS = Object.freeze([
+  "summary",
+  "description",
+  "timetracking",
+  "timespent",
+  "timeoriginalestimate",
+  "timeestimate"
+]);
 
 const ISSUE_TEMPLATE_VARIABLES = Object.freeze([
   "key",
@@ -97,7 +107,11 @@ async function initializeExtension(reason) {
     const settings = await getSettings();
     await syncJiraContentScript(settings);
 
-    if (reason === "install" || !settings.jiraOrigin) {
+    if (
+      reason === "install" ||
+      !settings.jiraOrigin ||
+      !hasStartConfiguration(settings)
+    ) {
       await chrome.runtime.openOptionsPage();
     }
   } catch (error) {
@@ -249,15 +263,35 @@ async function getSettings() {
 }
 
 function toPublicSettings(settings, jiraPermissionGranted = false) {
-  const togglConfigured = Boolean(settings.apiToken && settings.workspaceId);
+  const hasApiToken = Boolean(settings.apiToken);
+  const workspaceConfigured = isPositiveInteger(settings.workspaceId);
+  const projectConfigured = isPositiveInteger(settings.projectId);
+  const togglConnected = hasApiToken && workspaceConfigured;
+  const togglConfigured = togglConnected && projectConfigured;
   const jiraConfigured = Boolean(settings.jiraOrigin && jiraPermissionGranted);
+
+  let configurationRequired = "";
+  if (!hasApiToken) {
+    configurationRequired = "api-token";
+  } else if (!workspaceConfigured) {
+    configurationRequired = "workspace";
+  } else if (!projectConfigured) {
+    configurationRequired = "project";
+  } else if (!jiraConfigured) {
+    configurationRequired = "jira";
+  }
 
   return {
     configured: togglConfigured && jiraConfigured,
     togglConfigured,
+    togglConnected,
+    workspaceConfigured,
+    projectConfigured,
+    canAccessTimers: hasApiToken,
+    configurationRequired,
     jiraConfigured,
     jiraPermissionGranted: Boolean(jiraPermissionGranted),
-    hasApiToken: Boolean(settings.apiToken),
+    hasApiToken,
     jiraOrigin: settings.jiraOrigin || "",
     workspaceId: settings.workspaceId,
     workspaceName: settings.workspaceName || "",
@@ -310,7 +344,10 @@ async function validateAndSaveSettings(input) {
     candidate.workspaceId,
     "Workspace ID"
   );
-  const projectId = normalizeOptionalPositiveInteger(candidate.projectId, "Project ID");
+  const projectId = normalizeRequiredPositiveInteger(
+    candidate.projectId,
+    "Toggl project ID"
+  );
   const descriptionTemplate = normalizeTemplate(candidate.descriptionTemplate);
   const billable = candidate.billable === true;
   const stopExisting = candidate.stopExisting !== false;
@@ -334,14 +371,35 @@ async function validateAndSaveSettings(input) {
   }
 
   const workspace = await togglRequest(`/api/v9/workspaces/${workspaceId}`, { apiToken });
-  let projectName = "";
+  const project = await togglRequest(
+    `/api/v9/workspaces/${workspaceId}/projects/${projectId}`,
+    { apiToken }
+  );
+  const returnedProjectId = Number(project?.id || 0);
+  const projectWorkspaceId = Number(
+    project?.workspace_id || project?.workspaceId || project?.wid || 0
+  );
 
-  if (projectId) {
-    const project = await togglRequest(
-      `/api/v9/workspaces/${workspaceId}/projects/${projectId}`,
-      { apiToken }
+  if (returnedProjectId && returnedProjectId !== projectId) {
+    throw new UserFacingError(
+      "TOGGL_PROJECT_MISMATCH",
+      "Toggl returned a different project than the one requested. Check the project ID."
     );
-    projectName = String(project?.name || "");
+  }
+
+  if (projectWorkspaceId && projectWorkspaceId !== workspaceId) {
+    throw new UserFacingError(
+      "TOGGL_PROJECT_WORKSPACE_MISMATCH",
+      "The Toggl project does not belong to the selected workspace."
+    );
+  }
+
+  const projectName = String(project?.name || "").trim();
+  if (!projectName) {
+    throw new UserFacingError(
+      "TOGGL_PROJECT_INVALID",
+      "Toggl did not return a valid project for that workspace and project ID."
+    );
   }
 
   const settings = {
@@ -397,10 +455,16 @@ async function getPopupState() {
   const settings = await getSettings();
   const publicSettings = await getPublicSettings(settings);
 
-  if (!publicSettings.togglConfigured) {
+  if (!settings.apiToken) {
     return {
       settings: publicSettings,
       current: null,
+      workedToday: {
+        status: "not-configured",
+        totalSeconds: null,
+        message: "Connect Toggl to load today's total."
+      },
+      jira: { status: "not-applicable" },
       worklogs: await getWorklogSummary(settings)
     };
   }
@@ -408,9 +472,16 @@ async function getPopupState() {
   const current = await getCurrentTimeEntry(settings.apiToken);
   await reconcileStoppedTrackedTimers(settings, current?.id).catch(() => undefined);
 
+  const [workedToday, jira] = await Promise.all([
+    getWorkedTodaySummary(settings.apiToken, current),
+    getCurrentJiraInsight(current, settings, publicSettings)
+  ]);
+
   return {
     settings: publicSettings,
     current: sanitizeEntry(current),
+    workedToday,
+    jira,
     worklogs: await getWorklogSummary(settings)
   };
 }
@@ -421,17 +492,14 @@ async function getTimerStatus(issueInput) {
   const description = formatDescription(settings.descriptionTemplate, issue);
   const publicSettings = await getPublicSettings(settings);
 
-  if (!publicSettings.configured) {
-    return {
-      configured: false,
-      description,
-      isCurrentIssue: false
-    };
-  }
+  const current = settings.apiToken
+    ? await getCurrentTimeEntry(settings.apiToken)
+    : null;
 
-  const current = await getCurrentTimeEntry(settings.apiToken);
   return {
-    configured: true,
+    configured: publicSettings.configured,
+    canStart: publicSettings.configured,
+    configurationRequired: publicSettings.configurationRequired,
     description,
     isCurrentIssue: descriptionsMatch(current?.description, description)
   };
@@ -488,14 +556,11 @@ async function startDescriptionTimer(description, settings, issue = null) {
     created_with: CREATED_WITH,
     description,
     duration: -1,
+    project_id: settings.projectId,
     start: new Date().toISOString(),
     stop: null,
     workspace_id: settings.workspaceId
   };
-
-  if (settings.projectId) {
-    body.project_id = settings.projectId;
-  }
 
   const created = await togglRequest(
     `/api/v9/workspaces/${settings.workspaceId}/time_entries`,
@@ -525,7 +590,7 @@ async function startDescriptionTimer(description, settings, issue = null) {
 
 async function stopTimerForIssue(issueInput) {
   const issue = normalizeIssue(issueInput);
-  const settings = await getConfiguredTogglSettings();
+  const settings = await getTogglAccessSettings();
   const description = formatDescription(settings.descriptionTemplate, issue);
   const current = await getCurrentTimeEntry(settings.apiToken);
 
@@ -550,7 +615,7 @@ async function stopTimerForIssue(issueInput) {
 }
 
 async function stopCurrentTimer() {
-  const settings = await getConfiguredTogglSettings();
+  const settings = await getTogglAccessSettings();
   const current = await getCurrentTimeEntry(settings.apiToken);
 
   if (!current) {
@@ -572,10 +637,23 @@ async function stopCurrentTimer() {
 async function getConfiguredTogglSettings() {
   const settings = await getSettings();
 
-  if (!settings.apiToken || !settings.workspaceId) {
+  if (!hasStartConfiguration(settings)) {
     throw new UserFacingError(
       "CONFIG_NOT_SET",
-      "Configure your Toggl API token and workspace before starting a timer."
+      "Configure your Toggl API token, workspace, and Toggl project ID before starting a timer."
+    );
+  }
+
+  return settings;
+}
+
+async function getTogglAccessSettings() {
+  const settings = await getSettings();
+
+  if (!settings.apiToken) {
+    throw new UserFacingError(
+      "CONFIG_NOT_SET",
+      "Configure your Toggl API token before accessing timers."
     );
   }
 
@@ -593,6 +671,547 @@ async function getCurrentTimeEntry(apiToken) {
   }
 
   return entry;
+}
+
+async function getWorkedTodaySummary(apiToken, currentEntry, nowInput = new Date()) {
+  const interval = getLocalDayInterval(nowInput);
+
+  try {
+    const entries = await togglRequest(
+      `/api/v9/me/time_entries?start_date=${encodeURIComponent(interval.start)}&end_date=${encodeURIComponent(interval.end)}`,
+      { apiToken }
+    );
+    const totalSeconds = calculateDailyWorkedSeconds(
+      Array.isArray(entries) ? entries : [],
+      currentEntry,
+      interval.startMs,
+      interval.endMs
+    );
+
+    return {
+      status: "ok",
+      totalSeconds,
+      calculatedAt: interval.end,
+      dayStart: interval.start,
+      runningEntryId: isRunningTimeEntry(currentEntry)
+        ? Number(currentEntry.id) || null
+        : null
+    };
+  } catch {
+    return {
+      status: "error",
+      totalSeconds: null,
+      calculatedAt: interval.end,
+      dayStart: interval.start,
+      runningEntryId: null,
+      message: "Worked today is temporarily unavailable. Timer controls still work."
+    };
+  }
+}
+
+function getLocalDayInterval(nowInput = new Date()) {
+  const now = nowInput instanceof Date
+    ? new Date(nowInput.getTime())
+    : new Date(nowInput);
+
+  if (!Number.isFinite(now.getTime())) {
+    throw new UserFacingError("INVALID_DATE", "Could not determine the local calendar day.");
+  }
+
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return {
+    start: start.toISOString(),
+    end: now.toISOString(),
+    startMs: start.getTime(),
+    endMs: now.getTime()
+  };
+}
+
+function calculateDailyWorkedSeconds(
+  entries,
+  currentEntry,
+  dayStartMs,
+  nowMs
+) {
+  const startBoundary = Number(dayStartMs);
+  const endBoundary = Number(nowMs);
+  if (
+    !Number.isFinite(startBoundary) ||
+    !Number.isFinite(endBoundary) ||
+    endBoundary < startBoundary
+  ) {
+    return 0;
+  }
+
+  const byId = new Map();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+
+    const key = entry.id === null || entry.id === undefined
+      ? `anonymous:${byId.size}`
+      : String(entry.id);
+    byId.set(key, mergeTimeEntries(byId.get(key), entry));
+  }
+
+  if (currentEntry && typeof currentEntry === "object") {
+    const key = currentEntry.id === null || currentEntry.id === undefined
+      ? "current"
+      : String(currentEntry.id);
+    byId.set(key, mergeTimeEntries(byId.get(key), currentEntry));
+  }
+
+  let totalSeconds = 0;
+  for (const entry of byId.values()) {
+    const interval = getTimeEntryInterval(entry, endBoundary);
+    if (!interval) {
+      continue;
+    }
+
+    const clippedStart = Math.max(startBoundary, interval.startMs);
+    const clippedEnd = Math.min(endBoundary, interval.endMs);
+    if (clippedEnd > clippedStart) {
+      totalSeconds += Math.floor((clippedEnd - clippedStart) / 1000);
+    }
+  }
+
+  return Math.max(0, totalSeconds);
+}
+
+function getTimeEntryInterval(entry, nowMs) {
+  const duration = Number(entry?.duration);
+  let startMs = Date.parse(entry?.start || "");
+
+  if (!Number.isFinite(startMs) && Number.isFinite(duration) && duration < 0) {
+    const encodedStartSeconds = Math.abs(duration);
+    const encodedStartMs = encodedStartSeconds * 1000;
+    if (
+      encodedStartSeconds >= MIN_PLAUSIBLE_UNIX_SECONDS &&
+      encodedStartMs <= nowMs
+    ) {
+      startMs = encodedStartMs;
+    }
+  }
+
+  if (!Number.isFinite(startMs)) {
+    return null;
+  }
+
+  let endMs;
+  if (isRunningTimeEntry(entry)) {
+    endMs = nowMs;
+  } else {
+    endMs = Date.parse(entry?.stop || "");
+    if (!Number.isFinite(endMs) && Number.isFinite(duration) && duration >= 0) {
+      endMs = startMs + duration * 1000;
+    }
+  }
+
+  if (!Number.isFinite(endMs) || endMs < startMs) {
+    return null;
+  }
+
+  return { startMs, endMs };
+}
+
+function isRunningTimeEntry(entry) {
+  if (!entry || typeof entry !== "object" || entry.stop) {
+    return false;
+  }
+
+  const duration = Number(entry.duration);
+  return Number.isFinite(duration) ? duration < 0 : Boolean(entry.start);
+}
+
+async function getCurrentJiraInsight(currentEntry, settings, publicSettings) {
+  if (!currentEntry) {
+    return { status: "not-applicable" };
+  }
+
+  const association = await identifyJiraIssueForEntry(currentEntry, settings);
+  if (!association) {
+    return { status: "not-applicable" };
+  }
+
+  if (!publicSettings.jiraConfigured) {
+    return {
+      status: "error",
+      issueKey: association.issueKey,
+      detection: association.detection,
+      message: "Jira details are unavailable until access to the configured Jira site is granted."
+    };
+  }
+
+  try {
+    const fields = JIRA_INSIGHT_FIELDS.join(",");
+    const result = await jiraRequestWithFallback(settings, (apiVersion) => ({
+      path: `/rest/api/${apiVersion}/issue/${encodeURIComponent(association.issueKey)}?fields=${fields}`
+    }));
+    const payload = result.payload && typeof result.payload === "object"
+      ? result.payload
+      : {};
+    const issueKey = isValidJiraIssueKey(payload.key)
+      ? String(payload.key).toUpperCase()
+      : association.issueKey;
+    const issueFields = payload.fields && typeof payload.fields === "object"
+      ? payload.fields
+      : {};
+    const summary = truncate(
+      normalizeWhitespace(issueFields.summary || "Untitled Jira issue"),
+      1000
+    );
+    const timeTracking = extractJiraTimeTracking(issueFields);
+    const descriptionMarkdown = adfToMarkdown(issueFields.description);
+
+    return {
+      status: "ok",
+      issueKey,
+      detection: association.detection,
+      summary,
+      ...timeTracking,
+      clipboardText: buildJiraClipboardDocument({
+        issueKey,
+        summary,
+        descriptionMarkdown
+      })
+    };
+  } catch {
+    return {
+      status: "error",
+      issueKey: association.issueKey,
+      detection: association.detection,
+      message: "Jira progress could not be loaded. You can still stop the timer."
+    };
+  }
+}
+
+async function identifyJiraIssueForEntry(entry, settings) {
+  const entryId = Number(entry?.id || 0);
+  if (entryId) {
+    const state = await getWorklogState();
+    const record = state.entries[String(entryId)];
+    if (
+      record?.jiraOrigin === settings.jiraOrigin &&
+      isValidJiraIssueKey(record.issueKey)
+    ) {
+      return {
+        issueKey: String(record.issueKey).toUpperCase(),
+        detection: "association"
+      };
+    }
+  }
+
+  const issueKey = extractJiraIssueKey(entry?.description);
+  return issueKey
+    ? { issueKey, detection: "description" }
+    : null;
+}
+
+function extractJiraIssueKey(value) {
+  const match = String(value || "").match(JIRA_ISSUE_KEY_PATTERN);
+  return match ? match[1].toUpperCase() : null;
+}
+
+function isValidJiraIssueKey(value) {
+  return /^[A-Z][A-Z0-9_]*-\d+$/.test(String(value || "").trim().toUpperCase());
+}
+
+function extractJiraTimeTracking(fields) {
+  const tracking = fields?.timetracking && typeof fields.timetracking === "object"
+    ? fields.timetracking
+    : {};
+  const loggedSeconds = firstNonNegativeInteger(
+    tracking.timeSpentSeconds,
+    fields?.timespent,
+    0
+  );
+  const originalEstimateSeconds = firstNonNegativeInteger(
+    tracking.originalEstimateSeconds,
+    fields?.timeoriginalestimate,
+    null
+  );
+  const remainingEstimateSeconds = firstNonNegativeInteger(
+    tracking.remainingEstimateSeconds,
+    fields?.timeestimate,
+    null
+  );
+
+  return {
+    loggedSeconds,
+    originalEstimateSeconds,
+    remainingEstimateSeconds
+  };
+}
+
+function firstNonNegativeInteger(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") {
+      continue;
+    }
+
+    const number = Number(value);
+    if (Number.isFinite(number) && number >= 0) {
+      return Math.floor(number);
+    }
+  }
+
+  return null;
+}
+
+function adfToMarkdown(description) {
+  if (typeof description === "string") {
+    return normalizeMarkdown(description) || "(No description)";
+  }
+
+  if (!description || typeof description !== "object") {
+    return "(No description)";
+  }
+
+  const rendered = renderAdfNode(description, { listDepth: 0 });
+  return normalizeMarkdown(rendered) || "(No description)";
+}
+
+function renderAdfNode(node, context = {}) {
+  if (!node || typeof node !== "object") {
+    return "";
+  }
+
+  const content = Array.isArray(node.content) ? node.content : [];
+  const renderChildren = () => content
+    .map((child) => renderAdfNode(child, context))
+    .join("");
+
+  switch (node.type) {
+    case "doc":
+      return renderChildren();
+
+    case "paragraph":
+      return `${renderChildren().trimEnd()}\n\n`;
+
+    case "heading": {
+      const level = Math.min(6, Math.max(1, Number(node.attrs?.level) || 1));
+      return `${"#".repeat(level)} ${renderChildren().trim()}\n\n`;
+    }
+
+    case "text":
+      return renderAdfText(node);
+
+    case "hardBreak":
+      return "\\\n";
+
+    case "rule":
+      return "---\n\n";
+
+    case "bulletList":
+    case "orderedList":
+      return `${renderAdfList(node, context.listDepth || 0)}\n\n`;
+
+    case "taskList":
+      return `${renderAdfTaskList(node, context.listDepth || 0)}\n\n`;
+
+    case "listItem":
+    case "taskItem":
+      return renderChildren();
+
+    case "blockquote": {
+      const quote = normalizeMarkdown(renderChildren());
+      return `${quote.split("\n").map((line) => `> ${line}`).join("\n")}\n\n`;
+    }
+
+    case "codeBlock": {
+      const code = extractAdfPlainText(node).replace(/\n$/, "");
+      const fence = chooseCodeFence(code);
+      const language = String(node.attrs?.language || "").replace(/[^A-Za-z0-9_+.-]/g, "");
+      return `${fence}${language}\n${code}\n${fence}\n\n`;
+    }
+
+    case "mention":
+      return `@${normalizeWhitespace(
+        node.attrs?.text || node.attrs?.displayName || node.attrs?.id || "mention"
+      ).replace(/^@/, "")}`;
+
+    case "emoji":
+      return String(node.attrs?.text || node.attrs?.shortName || node.attrs?.id || "");
+
+    case "table":
+      return `${renderAdfTable(node)}\n\n`;
+
+    case "tableRow":
+    case "tableHeader":
+    case "tableCell":
+      return renderChildren();
+
+    default:
+      return renderChildren();
+  }
+}
+
+function renderAdfText(node) {
+  let text = String(node.text || "");
+  const marks = Array.isArray(node.marks) ? node.marks : [];
+  const codeMark = marks.find((mark) => mark?.type === "code");
+
+  if (codeMark) {
+    const fence = chooseInlineCodeFence(text);
+    text = `${fence}${text}${fence}`;
+  }
+
+  for (const mark of marks) {
+    if (!mark || mark.type === "code") {
+      continue;
+    }
+
+    if (mark.type === "strong") {
+      text = `**${text}**`;
+    } else if (mark.type === "em") {
+      text = `*${text}*`;
+    } else if (mark.type === "strike") {
+      text = `~~${text}~~`;
+    } else if (mark.type === "link" && mark.attrs?.href) {
+      text = `[${text}](${String(mark.attrs.href)})`;
+    }
+  }
+
+  return text;
+}
+
+function renderAdfList(node, depth) {
+  const items = (Array.isArray(node.content) ? node.content : [])
+    .filter((item) => item?.type === "listItem");
+  const ordered = node.type === "orderedList";
+  const firstNumber = Math.max(1, Number(node.attrs?.order) || 1);
+  const indent = "  ".repeat(depth);
+
+  return items.map((item, index) => {
+    const prefix = ordered ? `${firstNumber + index}. ` : "- ";
+    return renderAdfListItem(item, indent, prefix, depth);
+  }).join("\n");
+}
+
+function renderAdfTaskList(node, depth) {
+  const items = (Array.isArray(node.content) ? node.content : [])
+    .filter((item) => item?.type === "taskItem");
+  const indent = "  ".repeat(depth);
+
+  return items.map((item) => {
+    const checked = item.attrs?.state === "DONE" || item.attrs?.state === "done";
+    return renderAdfListItem(item, indent, `- [${checked ? "x" : " "}] `, depth);
+  }).join("\n");
+}
+
+function renderAdfListItem(item, indent, prefix, depth) {
+  const children = Array.isArray(item.content) ? item.content : [];
+  const bodyParts = [];
+  const nestedParts = [];
+
+  for (const child of children) {
+    if (["bulletList", "orderedList", "taskList"].includes(child?.type)) {
+      const rendered = child.type === "taskList"
+        ? renderAdfTaskList(child, depth + 1)
+        : renderAdfList(child, depth + 1);
+      if (rendered) {
+        nestedParts.push(rendered);
+      }
+    } else {
+      const rendered = normalizeMarkdown(renderAdfNode(child, { listDepth: depth + 1 }));
+      if (rendered) {
+        bodyParts.push(rendered);
+      }
+    }
+  }
+
+  const body = bodyParts.join(" ") || " ";
+  const continuation = `${indent}${" ".repeat(prefix.length)}`;
+  const lines = body.split("\n");
+  let result = `${indent}${prefix}${lines[0]}`;
+  for (const line of lines.slice(1)) {
+    result += `\n${continuation}${line}`;
+  }
+  if (nestedParts.length > 0) {
+    result += `\n${nestedParts.join("\n")}`;
+  }
+  return result;
+}
+
+function renderAdfTable(node) {
+  const rows = (Array.isArray(node.content) ? node.content : [])
+    .filter((row) => row?.type === "tableRow")
+    .map((row) => (Array.isArray(row.content) ? row.content : [])
+      .filter((cell) => ["tableHeader", "tableCell"].includes(cell?.type))
+      .map((cell) => normalizeMarkdown(renderAdfNode(cell, {}))
+        .replace(/\n+/g, " / ")
+        .replace(/\|/g, "\\|") || " "));
+
+  if (rows.length === 0) {
+    return "";
+  }
+
+  const columnCount = Math.max(...rows.map((row) => row.length), 1);
+  const normalizedRows = rows.map((row) => [
+    ...row,
+    ...Array(Math.max(0, columnCount - row.length)).fill(" ")
+  ]);
+  const line = (row) => `| ${row.join(" | ")} |`;
+  const separator = Array(columnCount).fill("---");
+  return [line(normalizedRows[0]), line(separator), ...normalizedRows.slice(1).map(line)]
+    .join("\n");
+}
+
+function extractAdfPlainText(node) {
+  if (!node || typeof node !== "object") {
+    return "";
+  }
+  if (node.type === "text") {
+    return String(node.text || "");
+  }
+  if (node.type === "hardBreak") {
+    return "\n";
+  }
+  return (Array.isArray(node.content) ? node.content : [])
+    .map(extractAdfPlainText)
+    .join("");
+}
+
+function normalizeMarkdown(value) {
+  return String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function chooseInlineCodeFence(content) {
+  const longest = longestBacktickRun(content);
+  return "`".repeat(Math.max(1, longest + 1));
+}
+
+function chooseCodeFence(content) {
+  return "`".repeat(Math.max(3, longestBacktickRun(content) + 1));
+}
+
+function longestBacktickRun(value) {
+  const matches = String(value || "").match(/`+/g) || [];
+  return matches.reduce((maximum, match) => Math.max(maximum, match.length), 0);
+}
+
+function buildJiraClipboardDocument({ issueKey, summary, descriptionMarkdown }) {
+  const title = `[${String(issueKey || "").toUpperCase()}] ${normalizeWhitespace(summary || "")}`;
+  const description = normalizeMarkdown(descriptionMarkdown) || "(No description)";
+  const titleFence = chooseCodeFence(title);
+  const descriptionFence = chooseCodeFence(description);
+
+  return [
+    "Title:",
+    `${titleFence}text`,
+    title,
+    titleFence,
+    "",
+    "Description:",
+    `${descriptionFence}md`,
+    description,
+    descriptionFence
+  ].join("\n");
 }
 
 async function stopTimeEntry(entry, apiToken) {
@@ -744,7 +1363,7 @@ async function finalizeTrackedTimer(entry, settings, fallbackIssue = null) {
 }
 
 async function syncPendingWorklogs() {
-  const settings = await getConfiguredTogglSettings();
+  const settings = await getTogglAccessSettings();
   await reconcileStoppedTrackedTimers(settings, null).catch(() => undefined);
 
   const state = await getWorklogState();
@@ -1720,6 +2339,30 @@ function scheduleContentScriptSync() {
   void syncJiraContentScript().catch((error) => {
     console.error("Could not synchronize the Jira content script.", error);
   });
+}
+
+function normalizeRequiredPositiveInteger(value, fieldName) {
+  const number = normalizeOptionalPositiveInteger(value, fieldName);
+  if (!number) {
+    throw new UserFacingError(
+      "MISSING_PROJECT_ID",
+      `Enter a ${fieldName}.`
+    );
+  }
+  return number;
+}
+
+function isPositiveInteger(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0;
+}
+
+function hasStartConfiguration(settings) {
+  return Boolean(
+    settings?.apiToken &&
+    isPositiveInteger(settings.workspaceId) &&
+    isPositiveInteger(settings.projectId)
+  );
 }
 
 function normalizeOptionalPositiveInteger(value, fieldName) {

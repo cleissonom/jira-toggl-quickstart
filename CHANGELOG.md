@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 — 2026-08-20
+
+- Made the Toggl project ID required, moved it into Quick Setup, and added API validation that the project exists in the selected workspace.
+- Blocked Jira and manual timer creation until a valid project is configured, and included `project_id` on every new Toggl entry.
+- Added upgrade handling that directs v0.4.0 users without a project to Settings while keeping existing running timers readable and stoppable.
+- Added a browser-local **Worked today** total covering completed and running entries across all Toggl projects and workspaces.
+- Added local live advancement of the daily total while the popup remains open, without repeated API polling.
+- Added Jira logged-time progress against original and remaining estimates for the current Jira-linked timer, including over-estimate states.
+- Added association-first Jira issue detection with a conservative description-key fallback and REST v3, v2, and `latest` compatibility.
+- Added an explicit **Copy Jira title & description** action and a local Atlassian Document Format-to-Markdown converter.
+- Added safe support for common ADF blocks, lists, task items, text marks, links, code, mentions, emoji, tables, unknown nodes, and dynamic backtick fences.
+- Preserved timer start/stop and Jira Work Log controls when secondary daily-total, Jira-progress, or clipboard operations fail.
+- Updated privacy, security, store-listing, release, and usage documentation for the new data flows.
+- Expanded automated coverage to 83 tests for required-project behavior, local-day totals, Jira progress, ADF conversion, clipboard feedback, and all existing Work Log behavior.
+
 ## 0.4.0 — 2026-08-19
 
 - Added optional one-way synchronization from Jira-linked Toggl timers to Jira Work Logs.

@@ -229,8 +229,8 @@ function configuredSettings(overrides = {}) {
     workspaceId: 123,
     workspaceName: "Workspace QA",
     profileName: "Dev QA",
-    projectId: null,
-    projectName: "",
+    projectId: 456,
+    projectName: "Internal Engineering",
     billable: false,
     descriptionTemplate: "[{key}] {summary}",
     stopExisting: true,
@@ -246,7 +246,8 @@ test("saves a configurable Jira origin, billable default, and protected Toggl to
   const harness = createHarness({ permissions: [JIRA_MATCH] });
   harness.fetchQueue.push(
     jsonResponse({ default_workspace_id: 123, fullname: "Dev QA" }),
-    jsonResponse({ id: 123, name: "Workspace QA" })
+    jsonResponse({ id: 123, name: "Workspace QA" }),
+    jsonResponse({ id: 456, workspace_id: 123, name: "Internal Engineering" })
   );
 
   const result = await harness.context.handleMessage(
@@ -256,7 +257,7 @@ test("saves a configurable Jira origin, billable default, and protected Toggl to
         jiraOrigin: `${JIRA_ORIGIN}/jira/software/c/projects/ECP/boards/754/backlog`,
         apiToken: "test-token",
         workspaceId: "",
-        projectId: "",
+        projectId: "456",
         billable: true,
         descriptionTemplate: "[{key}] {summary}",
         stopExisting: true,
@@ -291,7 +292,7 @@ test("saves a configurable Jira origin, billable default, and protected Toggl to
   assert.deepEqual(script.js, ["content.js"]);
   assert.equal(script.persistAcrossSessions, true);
 
-  assert.equal(harness.requests.length, 2);
+  assert.equal(harness.requests.length, 3);
   assert.equal(harness.requests[0].url, "https://api.track.toggl.com/api/v9/me");
   assert.equal(
     harness.requests[0].headers.Authorization,
@@ -330,6 +331,7 @@ test("starts a Jira timer with the default description and selected billing valu
   assert.equal(body.description, "[PROJ-123] Improve the onboarding workflow");
   assert.equal(body.billable, true);
   assert.equal(body.workspace_id, 123);
+  assert.equal(body.project_id, 456);
   assert.equal(body.duration, -1);
   assert.equal(body.stop, null);
   assert.equal(body.created_with, "jira-toggl-quickstart-chrome");
@@ -468,6 +470,7 @@ test("rejects unknown description variables before calling Toggl", async () => {
         settings: {
           jiraOrigin: JIRA_ORIGIN,
           apiToken: "test-token",
+          projectId: "456",
           descriptionTemplate: "[{ticket}] {summary}",
           billable: false,
           stopExisting: true
@@ -517,7 +520,7 @@ test("blocks Jira messages from an origin other than the configured site", async
 
 test("returns a Toggl-ready popup state even when Jira permission is not granted", async () => {
   const harness = createHarness({ initialSettings: configuredSettings() });
-  harness.fetchQueue.push(jsonResponse(null));
+  harness.fetchQueue.push(jsonResponse(null), jsonResponse([]));
 
   const result = await harness.context.handleMessage(
     { type: "GET_POPUP_STATE" },
@@ -859,7 +862,8 @@ test("reconciles a Jira timer stopped outside the extension when the popup opens
       duration: 1500
     }),
     jsonResponse({ startAt: 0, maxResults: 1000, total: 0, worklogs: [] }),
-    jsonResponse({ id: "70004" })
+    jsonResponse({ id: "70004" }),
+    jsonResponse([])
   );
 
   const result = await harness.context.handleMessage(
@@ -1030,6 +1034,7 @@ test("rejects unknown Jira Work Log comment variables before calling either API"
         settings: {
           jiraOrigin: JIRA_ORIGIN,
           apiToken: "test-token",
+          projectId: "456",
           descriptionTemplate: "[{key}] {summary}",
           billable: false,
           stopExisting: true,
@@ -1045,4 +1050,759 @@ test("rejects unknown Jira Work Log comment variables before calling either API"
   );
 
   assert.equal(harness.requests.length, 0);
+});
+
+test("requires a positive Toggl project ID before saving settings", async () => {
+  const harness = createHarness({ permissions: [JIRA_MATCH] });
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      {
+        type: "VALIDATE_AND_SAVE_SETTINGS",
+        settings: {
+          jiraOrigin: JIRA_ORIGIN,
+          apiToken: "test-token",
+          projectId: "",
+          descriptionTemplate: "[{key}] {summary}"
+        }
+      },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error?.code === "MISSING_PROJECT_ID"
+  );
+
+  assert.equal(harness.requests.length, 0);
+});
+
+test("rejects a Toggl project that belongs to a different workspace", async () => {
+  const harness = createHarness({ permissions: [JIRA_MATCH] });
+  harness.fetchQueue.push(
+    jsonResponse({ default_workspace_id: 123, fullname: "Dev QA" }),
+    jsonResponse({ id: 123, name: "Workspace QA" }),
+    jsonResponse({ id: 456, workspace_id: 999, name: "Wrong workspace" })
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      {
+        type: "VALIDATE_AND_SAVE_SETTINGS",
+        settings: {
+          jiraOrigin: JIRA_ORIGIN,
+          apiToken: "test-token",
+          projectId: "456",
+          descriptionTemplate: "[{key}] {summary}"
+        }
+      },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error?.code === "TOGGL_PROJECT_WORKSPACE_MISMATCH"
+  );
+
+  assert.equal(harness.requests.length, 3);
+  assert.match(harness.requests[2].url, /\/workspaces\/123\/projects\/456$/);
+});
+
+test("rejects a Toggl project ID that does not exist", async () => {
+  const harness = createHarness({ permissions: [JIRA_MATCH] });
+  harness.fetchQueue.push(
+    jsonResponse({ default_workspace_id: 123, fullname: "Dev QA" }),
+    jsonResponse({ id: 123, name: "Workspace QA" }),
+    jsonResponse({ message: "Project not found" }, 404)
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      {
+        type: "VALIDATE_AND_SAVE_SETTINGS",
+        settings: {
+          jiraOrigin: JIRA_ORIGIN,
+          apiToken: "test-token",
+          projectId: "456",
+          descriptionTemplate: "[{key}] {summary}"
+        }
+      },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error?.code === "TOGGL_NOT_FOUND"
+  );
+});
+
+test("opens Settings after an upgrade when the saved project ID is missing", async () => {
+  const harness = createHarness({
+    initialSettings: configuredSettings({ projectId: null, projectName: "" }),
+    permissions: [JIRA_MATCH]
+  });
+
+  harness.listeners.installed({ reason: "update" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(harness.optionsOpenCount, 1);
+});
+
+test("blocks new timers while upgraded settings are missing a project", async () => {
+  const harness = createHarness({
+    initialSettings: configuredSettings({ projectId: null, projectName: "" }),
+    permissions: [JIRA_MATCH]
+  });
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "START_MANUAL_TIMER", description: "Blocked work" },
+      harness.extensionSender("popup.html")
+    ),
+    (error) => error?.code === "CONFIG_NOT_SET"
+  );
+
+  assert.equal(harness.requests.length, 0);
+});
+
+test("keeps an upgraded running timer readable and stoppable without a project", async () => {
+  const running = {
+    id: 11001,
+    workspace_id: 123,
+    description: "Existing running timer",
+    billable: false,
+    start: "2026-08-20T10:00:00Z",
+    duration: -1
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings({ projectId: null, projectName: "" }),
+    permissions: [JIRA_MATCH]
+  });
+  harness.fetchQueue.push(jsonResponse(running), jsonResponse([]));
+
+  const popup = await harness.context.handleMessage(
+    { type: "GET_POPUP_STATE" },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(popup.settings.togglConfigured, false);
+  assert.equal(popup.settings.configurationRequired, "project");
+  assert.equal(popup.current.id, 11001);
+  assert.equal(popup.workedToday.status, "ok");
+
+  harness.fetchQueue.push(
+    jsonResponse(running),
+    jsonResponse({
+      ...running,
+      stop: "2026-08-20T10:30:00Z",
+      duration: 1800
+    })
+  );
+  const stopped = await harness.context.handleMessage(
+    { type: "STOP_CURRENT_TIMER" },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(stopped.action, "stopped");
+  assert.equal(harness.requests.at(-1).method, "PATCH");
+  assert.match(harness.requests.at(-1).url, /\/workspaces\/123\/time_entries\/11001\/stop$/);
+});
+
+test("calculates Worked today from completed entries only", () => {
+  const harness = createHarness();
+  const start = Date.parse("2026-08-20T00:00:00Z");
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  const total = harness.context.calculateDailyWorkedSeconds([
+    {
+      id: 1,
+      start: "2026-08-20T08:00:00Z",
+      stop: "2026-08-20T09:15:00Z",
+      duration: 4500
+    },
+    {
+      id: 2,
+      start: "2026-08-20T10:00:00Z",
+      duration: 1800
+    }
+  ], null, start, now);
+
+  assert.equal(total, 6300);
+});
+
+test("calculates Worked today with a running entry using Toggl duration semantics", () => {
+  const harness = createHarness();
+  const start = Date.parse("2026-08-20T00:00:00Z");
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  const runningStart = Date.parse("2026-08-20T11:30:00Z");
+  const running = {
+    id: 3,
+    start: "2026-08-20T11:30:00Z",
+    duration: -Math.floor(runningStart / 1000)
+  };
+  const total = harness.context.calculateDailyWorkedSeconds([
+    {
+      id: 1,
+      start: "2026-08-20T08:00:00Z",
+      stop: "2026-08-20T09:00:00Z",
+      duration: 3600
+    },
+    running
+  ], running, start, now);
+
+  assert.equal(total, 5400);
+});
+
+test("derives a running entry start from Toggl's negative duration when start is absent", () => {
+  const harness = createHarness();
+  const dayStart = Date.parse("2026-08-20T00:00:00Z");
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  const runningStart = Date.parse("2026-08-20T11:42:30Z");
+
+  assert.equal(
+    harness.context.calculateDailyWorkedSeconds([
+      {
+        id: 4,
+        duration: -Math.floor(runningStart / 1000)
+      }
+    ], null, dayStart, now),
+    1050
+  );
+});
+
+test("does not treat Toggl's preferred -1 running duration as a Unix start time", () => {
+  const harness = createHarness();
+  const dayStart = Date.parse("2026-08-20T00:00:00Z");
+  const now = Date.parse("2026-08-20T12:00:00Z");
+
+  assert.equal(
+    harness.context.calculateDailyWorkedSeconds([
+      { id: 5, duration: -1 }
+    ], null, dayStart, now),
+    0
+  );
+});
+
+test("uses the browser-local midnight boundary and clips crossing entries", () => {
+  const harness = createHarness();
+  const interval = vm.runInContext(`(() => {
+    const value = getLocalDayInterval(new Date(2026, 7, 20, 12, 34, 56));
+    const localStart = new Date(value.start);
+    return {
+      ...value,
+      localHour: localStart.getHours(),
+      localMinute: localStart.getMinutes(),
+      localDate: localStart.getDate()
+    };
+  })()`, harness.context);
+
+  assert.equal(interval.localHour, 0);
+  assert.equal(interval.localMinute, 0);
+  assert.equal(interval.localDate, 20);
+
+  const total = harness.context.calculateDailyWorkedSeconds([
+    {
+      id: 1,
+      start: new Date(interval.startMs - 1800_000).toISOString(),
+      stop: new Date(interval.startMs + 1800_000).toISOString(),
+      duration: 3600
+    }
+  ], null, interval.startMs, interval.endMs);
+  assert.equal(total, 1800);
+});
+
+test("returns zero Worked today when there are no entries", () => {
+  const harness = createHarness();
+  assert.equal(
+    harness.context.calculateDailyWorkedSeconds([], null, 0, 10_000),
+    0
+  );
+});
+
+test("does not double-count the current entry returned by the daily endpoint", () => {
+  const harness = createHarness();
+  const start = Date.parse("2026-08-20T00:00:00Z");
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  const current = {
+    id: 44,
+    start: "2026-08-20T11:00:00Z",
+    duration: -1
+  };
+
+  assert.equal(
+    harness.context.calculateDailyWorkedSeconds([current], current, start, now),
+    3600
+  );
+});
+
+test("includes daily entries from multiple projects and workspaces", () => {
+  const harness = createHarness();
+  const start = Date.parse("2026-08-20T00:00:00Z");
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  const entries = [
+    { id: 1, workspace_id: 123, project_id: 456, start: "2026-08-20T08:00:00Z", duration: 900 },
+    { id: 2, workspace_id: 999, project_id: 777, start: "2026-08-20T09:00:00Z", duration: 1200 },
+    { id: 3, workspace_id: 123, project_id: null, start: "2026-08-20T10:00:00Z", duration: 300 }
+  ];
+
+  assert.equal(
+    harness.context.calculateDailyWorkedSeconds(entries, null, start, now),
+    2400
+  );
+});
+
+test("a daily-entry API failure does not break current timer controls", async () => {
+  const current = {
+    id: 12001,
+    workspace_id: 123,
+    description: "Current work without a Jira key",
+    start: "2026-08-20T10:00:00Z",
+    duration: -1
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
+  harness.fetchQueue.push(
+    jsonResponse(current),
+    jsonResponse({ message: "temporary failure" }, 500)
+  );
+
+  const result = await harness.context.handleMessage(
+    { type: "GET_POPUP_STATE" },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(result.current.id, 12001);
+  assert.equal(result.workedToday.status, "error");
+  assert.match(result.workedToday.message, /Timer controls still work/);
+  assert.equal(result.jira.status, "not-applicable");
+});
+
+test("queries all current-user entries between local midnight and now", async () => {
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
+  harness.fetchQueue.push(jsonResponse(null), jsonResponse([]));
+
+  const result = await harness.context.handleMessage(
+    { type: "GET_POPUP_STATE" },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(result.workedToday.status, "ok");
+  const dailyRequest = harness.requests.find((request) =>
+    request.url.includes("/api/v9/me/time_entries?")
+  );
+  assert.ok(dailyRequest);
+  const url = new URL(dailyRequest.url);
+  const start = new Date(url.searchParams.get("start_date"));
+  const end = new Date(url.searchParams.get("end_date"));
+  assert.equal(start.getHours(), 0);
+  assert.equal(start.getMinutes(), 0);
+  assert.ok(end.getTime() >= start.getTime());
+});
+
+test("detects the current Jira issue from the stored Toggl association first", async () => {
+  const current = {
+    id: 13001,
+    workspace_id: 123,
+    description: "Description deliberately has no issue key",
+    start: "2026-08-20T10:00:00Z",
+    duration: -1
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    initialWorklogState: {
+      version: 1,
+      entries: {
+        "13001": {
+          togglEntryId: 13001,
+          workspaceId: 123,
+          jiraOrigin: JIRA_ORIGIN,
+          issueKey: "ECP-3217",
+          description: current.description,
+          status: "running"
+        }
+      }
+    },
+    permissions: [JIRA_MATCH]
+  });
+  harness.fetchQueue.push(
+    jsonResponse(current),
+    jsonResponse([]),
+    jsonResponse({
+      key: "ECP-3217",
+      fields: {
+        summary: "Example Jira issue title",
+        description: "Plain Jira description",
+        timespent: 19800,
+        timeoriginalestimate: 28800,
+        timeestimate: 9000
+      }
+    })
+  );
+
+  const result = await harness.context.handleMessage(
+    { type: "GET_POPUP_STATE" },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(result.jira.status, "ok");
+  assert.equal(result.jira.detection, "association");
+  assert.equal(result.jira.issueKey, "ECP-3217");
+  assert.equal(result.jira.loggedSeconds, 19800);
+  assert.equal(result.jira.originalEstimateSeconds, 28800);
+  assert.equal(result.jira.remainingEstimateSeconds, 9000);
+});
+
+test("falls back to a conservative Jira key parsed from the Toggl description", async () => {
+  const current = {
+    id: 13002,
+    workspace_id: 123,
+    description: "Planning [abc_2-42] with the team",
+    start: "2026-08-20T10:00:00Z",
+    duration: -1
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
+  harness.fetchQueue.push(
+    jsonResponse(current),
+    jsonResponse([]),
+    jsonResponse({
+      key: "ABC_2-42",
+      fields: {
+        summary: "Fallback issue",
+        description: null,
+        timetracking: {}
+      }
+    })
+  );
+
+  const result = await harness.context.handleMessage(
+    { type: "GET_POPUP_STATE" },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(result.jira.status, "ok");
+  assert.equal(result.jira.detection, "description");
+  assert.equal(result.jira.issueKey, "ABC_2-42");
+});
+
+test("prefers Jira time-tracking seconds and preserves over-estimate values", () => {
+  const harness = createHarness();
+  const values = harness.context.extractJiraTimeTracking({
+    timetracking: {
+      timeSpentSeconds: 36000,
+      originalEstimateSeconds: 28800,
+      remainingEstimateSeconds: 1200
+    },
+    timespent: 1,
+    timeoriginalestimate: 2,
+    timeestimate: 3
+  });
+
+  assert.equal(values.loggedSeconds, 36000);
+  assert.equal(values.originalEstimateSeconds, 28800);
+  assert.equal(values.remainingEstimateSeconds, 1200);
+});
+
+test("handles missing logged time, missing estimates, and Jira remaining estimates", () => {
+  const harness = createHarness();
+  const missingLogged = harness.context.extractJiraTimeTracking({
+    timeoriginalestimate: 7200
+  });
+  assert.equal(missingLogged.loggedSeconds, 0);
+  assert.equal(missingLogged.originalEstimateSeconds, 7200);
+  assert.equal(missingLogged.remainingEstimateSeconds, null);
+
+  const missingOriginal = harness.context.extractJiraTimeTracking({
+    timespent: 19800,
+    timeestimate: 3600
+  });
+  assert.equal(missingOriginal.loggedSeconds, 19800);
+  assert.equal(missingOriginal.originalEstimateSeconds, null);
+  assert.equal(missingOriginal.remainingEstimateSeconds, 3600);
+});
+
+test("falls back from Jira REST v3 to v2 when loading popup insights", async () => {
+  const current = {
+    id: 13003,
+    workspace_id: 123,
+    description: "[PROJ-123] Compatible Jira",
+    start: "2026-08-20T10:00:00Z",
+    duration: -1
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
+  harness.fetchQueue.push(
+    jsonResponse(current),
+    jsonResponse([]),
+    jsonResponse({ errorMessages: ["v3 unavailable"] }, 404),
+    jsonResponse({
+      key: "PROJ-123",
+      fields: {
+        summary: "Compatible issue",
+        description: "v2 description",
+        timespent: 600,
+        timeoriginalestimate: 1200
+      }
+    })
+  );
+
+  const result = await harness.context.handleMessage(
+    { type: "GET_POPUP_STATE" },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(result.jira.status, "ok");
+  const jiraRequests = harness.requests.filter((request) => request.url.includes("/issue/PROJ-123?"));
+  assert.match(jiraRequests[0].url, /\/rest\/api\/3\//);
+  assert.match(jiraRequests[1].url, /\/rest\/api\/2\//);
+});
+
+test("a Jira progress API failure does not prevent the timer from being stopped", async () => {
+  const current = {
+    id: 13004,
+    workspace_id: 123,
+    description: "[PROJ-123] Jira unavailable",
+    start: "2026-08-20T10:00:00Z",
+    duration: -1
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
+  harness.fetchQueue.push(
+    jsonResponse(current),
+    jsonResponse([]),
+    jsonResponse({ message: "Jira unavailable" }, 500)
+  );
+
+  const result = await harness.context.handleMessage(
+    { type: "GET_POPUP_STATE" },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(result.current.id, 13004);
+  assert.equal(result.jira.status, "error");
+  assert.match(result.jira.message, /still stop the timer/);
+});
+
+test("does not request Jira details for a current timer without a ticket", async () => {
+  const current = {
+    id: 13005,
+    workspace_id: 123,
+    description: "General planning and notes",
+    start: "2026-08-20T10:00:00Z",
+    duration: -1
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
+  harness.fetchQueue.push(jsonResponse(current), jsonResponse([]));
+
+  const result = await harness.context.handleMessage(
+    { type: "GET_POPUP_STATE" },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(result.jira.status, "not-applicable");
+  assert.equal(
+    harness.requests.filter((request) => request.url.includes("/rest/api/")).length,
+    0
+  );
+});
+
+test("converts plain Jira descriptions and empty descriptions to Markdown", () => {
+  const harness = createHarness();
+  assert.equal(harness.context.adfToMarkdown("Plain Jira description"), "Plain Jira description");
+  assert.equal(harness.context.adfToMarkdown(""), "(No description)");
+  assert.equal(harness.context.adfToMarkdown(null), "(No description)");
+});
+
+test("converts ADF paragraphs, headings, hard breaks, and horizontal rules", () => {
+  const harness = createHarness();
+  const markdown = harness.context.adfToMarkdown({
+    type: "doc",
+    version: 1,
+    content: [
+      { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "Overview" }] },
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text: "First line" },
+          { type: "hardBreak" },
+          { type: "text", text: "Second line" }
+        ]
+      },
+      { type: "rule" }
+    ]
+  });
+
+  assert.equal(markdown, "## Overview\n\nFirst line\\\nSecond line\n\n---");
+});
+
+test("converts nested ADF bullet and ordered lists", () => {
+  const harness = createHarness();
+  const markdown = harness.context.adfToMarkdown({
+    type: "doc",
+    content: [
+      {
+        type: "bulletList",
+        content: [
+          {
+            type: "listItem",
+            content: [
+              { type: "paragraph", content: [{ type: "text", text: "Parent" }] },
+              {
+                type: "orderedList",
+                attrs: { order: 2 },
+                content: [
+                  { type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "Child" }] }] }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  });
+
+  assert.equal(markdown, "- Parent\n  2. Child");
+});
+
+test("converts common ADF text marks and links", () => {
+  const harness = createHarness();
+  const markdown = harness.context.adfToMarkdown({
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text: "Bold", marks: [{ type: "strong" }] },
+          { type: "text", text: " italic", marks: [{ type: "em" }] },
+          { type: "text", text: " code", marks: [{ type: "code" }] },
+          { type: "text", text: " strike", marks: [{ type: "strike" }] },
+          {
+            type: "text",
+            text: " link",
+            marks: [{ type: "link", attrs: { href: "https://example.test/docs" } }]
+          }
+        ]
+      }
+    ]
+  });
+
+  assert.equal(
+    markdown,
+    "**Bold*** italic*` code`~~ strike~~[ link](https://example.test/docs)"
+  );
+});
+
+test("converts ADF code blocks, blockquotes, mentions, emoji, and task items", () => {
+  const harness = createHarness();
+  const markdown = harness.context.adfToMarkdown({
+    type: "doc",
+    content: [
+      {
+        type: "codeBlock",
+        attrs: { language: "js" },
+        content: [{ type: "text", text: "const marker = ```;" }]
+      },
+      {
+        type: "blockquote",
+        content: [{ type: "paragraph", content: [{ type: "text", text: "Quoted" }] }]
+      },
+      {
+        type: "paragraph",
+        content: [
+          { type: "mention", attrs: { text: "@Alex" } },
+          { type: "text", text: " " },
+          { type: "emoji", attrs: { text: "🙂" } }
+        ]
+      },
+      {
+        type: "taskList",
+        content: [
+          {
+            type: "taskItem",
+            attrs: { state: "DONE" },
+            content: [{ type: "paragraph", content: [{ type: "text", text: "Ship it" }] }]
+          }
+        ]
+      }
+    ]
+  });
+
+  assert.match(markdown, /````js\nconst marker = ```;\n````/);
+  assert.match(markdown, /> Quoted/);
+  assert.match(markdown, /@Alex 🙂/);
+  assert.match(markdown, /- \[x\] Ship it/);
+});
+
+test("converts ADF tables and safely degrades unknown nodes through their children", () => {
+  const harness = createHarness();
+  const markdown = harness.context.adfToMarkdown({
+    type: "doc",
+    content: [
+      {
+        type: "unknownPanel",
+        content: [{ type: "paragraph", content: [{ type: "text", text: "Preserved child" }] }]
+      },
+      {
+        type: "table",
+        content: [
+          {
+            type: "tableRow",
+            content: [
+              { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "Name" }] }] },
+              { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "Value" }] }] }
+            ]
+          },
+          {
+            type: "tableRow",
+            content: [
+              { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "A" }] }] },
+              { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "B" }] }] }
+            ]
+          }
+        ]
+      }
+    ]
+  });
+
+  assert.match(markdown, /^Preserved child/);
+  assert.match(markdown, /\| Name \| Value \|/);
+  assert.match(markdown, /\| --- \| --- \|/);
+  assert.match(markdown, /\| A \| B \|/);
+});
+
+test("builds the exact Jira clipboard document structure", () => {
+  const harness = createHarness();
+  const document = harness.context.buildJiraClipboardDocument({
+    issueKey: "ECP-3217",
+    summary: "Example Jira issue title",
+    descriptionMarkdown: "The Jira description converted to Markdown."
+  });
+
+  assert.equal(document, [
+    "Title:",
+    "```text",
+    "[ECP-3217] Example Jira issue title",
+    "```",
+    "",
+    "Description:",
+    "```md",
+    "The Jira description converted to Markdown.",
+    "```"
+  ].join("\n"));
+});
+
+test("uses an outer clipboard fence longer than backticks in Jira content", () => {
+  const harness = createHarness();
+  const document = harness.context.buildJiraClipboardDocument({
+    issueKey: "ECP-3217",
+    summary: "Backtick example",
+    descriptionMarkdown: "Use ```javascript\nconst value = 1;\n``` here."
+  });
+
+  assert.match(document, /Description:\n````md\nUse ```javascript/);
+  assert.match(document, /``` here\.\n````$/);
 });

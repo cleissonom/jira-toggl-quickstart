@@ -16,6 +16,14 @@
         </div>
       </header>
 
+      <section id="worked-today" class="worked-today" aria-labelledby="worked-today-title">
+        <div>
+          <span id="worked-today-title" class="kicker">Worked today</span>
+          <strong id="worked-today-value">Loading…</strong>
+        </div>
+        <small id="worked-today-message" class="hidden"></small>
+      </section>
+
       <section id="timer" class="timer hidden" aria-live="polite">
         <div class="timer-heading">
           <span class="kicker">Current timer</span>
@@ -46,6 +54,21 @@
         </form>
       </section>
 
+      <section id="jira-progress" class="jira-progress hidden" aria-labelledby="jira-progress-title">
+        <div class="jira-progress-heading">
+          <span id="jira-progress-title" class="kicker">Jira progress</span>
+          <span id="jira-key" class="jira-key"></span>
+        </div>
+        <p id="jira-progress-summary" class="jira-progress-summary"></p>
+        <p id="jira-progress-detail" class="jira-progress-detail"></p>
+        <button id="copy-jira" class="secondary copy-jira hidden" type="button">
+          Copy Jira title &amp; description
+        </button>
+        <p id="copy-status" class="copy-status hidden" role="status" aria-live="polite"></p>
+      </section>
+
+      <button id="stop" class="danger full-width hidden" type="button">Stop timer</button>
+
       <section id="worklogs" class="worklogs hidden" aria-labelledby="worklogs-title">
         <div class="worklogs-heading">
           <span id="worklogs-title" class="kicker">Jira Work Logs</span>
@@ -56,13 +79,10 @@
       </section>
 
       <p id="empty" class="empty">Checking Toggl…</p>
-      <p id="notice" class="notice hidden"></p>
-      <p id="error" class="error hidden"></p>
+      <p id="notice" class="notice hidden" role="status" aria-live="polite"></p>
+      <p id="error" class="error hidden" role="alert"></p>
 
-      <div class="actions">
-        <button id="stop" class="danger hidden" type="button">Stop timer</button>
-        <button id="settings" class="secondary" type="button">Settings</button>
-      </div>
+      <button id="settings" class="secondary full-width settings-button" type="button">Settings</button>
     </main>
 
     <script src="popup.js"></script>

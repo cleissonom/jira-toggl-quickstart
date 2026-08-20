@@ -24,7 +24,7 @@
         <div class="section-heading">
           <div>
             <h2 id="setup-title">Quick setup</h2>
-            <p>Paste your Jira URL and Toggl token, choose the billing default, then save.</p>
+            <p>Paste your Jira URL and Toggl token, choose the required Toggl project, then save.</p>
           </div>
           <span id="connection-badge" class="badge">Not configured</span>
         </div>
@@ -64,6 +64,27 @@
                   target="_blank"
                   rel="noopener noreferrer"
                 >Open the Toggl API Token page ↗</a>
+              </small>
+            </label>
+
+            <label class="field project-field">
+              <span>
+                Toggl project ID
+                <strong class="required-indicator" aria-label="required">*</strong>
+              </span>
+              <input
+                id="project-id"
+                name="projectId"
+                type="number"
+                min="1"
+                step="1"
+                inputmode="numeric"
+                required
+                placeholder="Enter the project used for every timer"
+              />
+              <small>
+                Required. The project must exist in the selected or default workspace.
+                Every timer created by the extension is assigned to it.
               </small>
             </label>
           </div>
@@ -151,7 +172,7 @@
           <details id="advanced-settings" class="advanced">
             <summary>
               <span>Advanced settings</span>
-              <small>Workspace, fixed project, description template, and timer switching</small>
+              <small>Workspace, description template, and timer switching</small>
             </summary>
 
             <div class="advanced-content">
@@ -169,18 +190,6 @@
                   <small>Leave blank to use the default workspace returned by Toggl.</small>
                 </label>
 
-                <label class="field">
-                  <span>Fixed Toggl project ID <em>(optional)</em></span>
-                  <input
-                    id="project-id"
-                    name="projectId"
-                    type="number"
-                    min="1"
-                    inputmode="numeric"
-                    placeholder="No fixed project"
-                  />
-                  <small>Use this when all Jira timers should be assigned to one Toggl project.</small>
-                </label>
               </div>
 
               <label class="field">
@@ -228,11 +237,13 @@
           <aside class="data-disclosure" aria-labelledby="data-use-title">
             <strong id="data-use-title">How your data is used</strong>
             <p>
-              When you start a Jira timer, the extension reads only the issue fields needed by
-              your description template and sends the resulting timer description and selected
-              defaults to Toggl. If Work Log sync is enabled, the stopped duration, start time,
-              issue key, and configured comment are sent to your Jira site. Retry records stay in
-              this Chrome profile. Nothing is sent to the extension developer.
+              The extension reads your Toggl entries for the current browser-local day to show
+              Worked today, and uses your required project ID for every timer it creates. For an
+              identified Jira timer, it reads the issue summary, description, logged time, and
+              estimates to show progress locally. Jira title and description are copied only after
+              you click the copy button. If Work Log sync is enabled, the stopped duration, start
+              time, issue key, and configured comment are sent to your Jira site. Retry records stay
+              in this Chrome profile. Nothing is sent to the extension developer.
             </p>
           </aside>
 
@@ -251,7 +262,7 @@
           <div><span>1</span><p>Open an issue or select one from a Jira board or backlog.</p></div>
           <div><span>2</span><p>Click the floating <strong>Start in Toggl</strong> button.</p></div>
           <div><span>3</span><p>Click the same button again to stop it and optionally create a Jira Work Log.</p></div>
-          <div><span>4</span><p>Review or retry pending Work Logs from the popup; manual timers remain Toggl-only.</p></div>
+          <div><span>4</span><p>Use the popup to see Worked today, Jira progress, copy Jira details, or retry pending Work Logs.</p></div>
         </div>
       </section>
 

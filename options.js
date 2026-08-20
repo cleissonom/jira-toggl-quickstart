@@ -105,7 +105,6 @@ function applySettings(settings) {
   }
 
   advancedSettings.open = Boolean(
-    settings.projectId ||
     settings.descriptionTemplate !== DEFAULT_TEMPLATE ||
     settings.stopExisting === false
   );
@@ -124,6 +123,8 @@ function applySettings(settings) {
       ? `Ready · ${settings.workspaceName}${project}`
       : "Ready";
     connectionBadge.classList.add("connected");
+  } else if (settings.configurationRequired === "project") {
+    connectionBadge.textContent = "Toggl project required";
   } else if (settings.togglConfigured && !settings.jiraConfigured) {
     connectionBadge.textContent = "Jira access needed";
   } else {
@@ -169,7 +170,7 @@ async function saveSettings() {
     return;
   }
 
-  showStatus("Checking your Toggl account and saving the defaults…");
+  showStatus("Checking your Toggl account, workspace, and project…");
 
   const response = await sendMessage({
     type: "VALIDATE_AND_SAVE_SETTINGS",

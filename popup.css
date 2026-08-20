@@ -51,17 +51,50 @@ header span {
   object-fit: cover;
 }
 
+.worked-today,
 .timer,
-.manual {
+.manual,
+.jira-progress {
   margin-top: 14px;
-  padding: 14px;
+  padding: 13px 14px;
   border: 1px solid #dfe1e6;
   border-radius: 12px;
   background: #f7f8f9;
 }
 
+.worked-today {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #f0f7ff;
+  border-color: #b8d5ff;
+}
+
+.worked-today > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.worked-today strong {
+  color: #0c66e4;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.worked-today small {
+  max-width: 180px;
+  color: #626f86;
+  font-size: 10px;
+  line-height: 1.35;
+  text-align: right;
+}
+
 .timer-heading,
-.manual-heading {
+.manual-heading,
+.jira-progress-heading,
+.worklogs-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -77,7 +110,9 @@ header span {
 }
 
 .billing,
-.manual-default {
+.manual-default,
+.jira-key,
+.worklogs-count {
   padding: 3px 7px;
   border-radius: 999px;
   background: #f1f2f4;
@@ -92,7 +127,7 @@ header span {
   color: #216e4e;
 }
 
-.timer p {
+.timer > p {
   margin: 9px 0 10px;
   color: #172b4d;
   font-size: 13px;
@@ -132,16 +167,45 @@ header span {
   outline: none;
 }
 
-.manual input:focus {
-  border-color: #0c66e4;
-  box-shadow: 0 0 0 3px rgba(12, 102, 228, 0.14);
-}
-
 .manual small {
   color: #626f86;
   font-size: 10px;
   line-height: 1.4;
 }
+
+.jira-progress {
+  border-color: #c7d1e0;
+  background: #fff;
+}
+
+.jira-progress-summary {
+  margin: 10px 0 3px;
+  color: #172b4d;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.jira-progress-detail {
+  margin: 0;
+  color: #44546f;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.copy-jira {
+  width: 100%;
+  margin-top: 11px;
+}
+
+.copy-status {
+  margin: 8px 0 0;
+  color: #216e4e;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.copy-status.error-state { color: #ae2a19; }
 
 .empty,
 .notice,
@@ -178,7 +242,6 @@ header span {
   color: #ae2a19;
 }
 
-
 .worklogs {
   margin-top: 14px;
   padding: 12px;
@@ -187,20 +250,9 @@ header span {
   background: #fffdf5;
 }
 
-.worklogs-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .worklogs-count {
-  padding: 3px 7px;
-  border-radius: 999px;
   background: #fff0b3;
   color: #7f5f01;
-  font-size: 10px;
-  font-weight: 800;
 }
 
 .worklogs ul {
@@ -232,15 +284,8 @@ header span {
 .worklogs li .worklog-error { color: #ae2a19; }
 .worklogs button { width: 100%; }
 
-.actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 14px;
-}
-
 button {
   min-height: 38px;
-  flex: 1;
   padding: 8px 11px;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -250,10 +295,23 @@ button {
 }
 
 button:disabled { cursor: progress; opacity: 0.7; }
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid rgba(12, 102, 228, 0.28);
+  outline-offset: 2px;
+}
+
+.manual input:focus {
+  border-color: #0c66e4;
+  box-shadow: 0 0 0 3px rgba(12, 102, 228, 0.14);
+}
+
 .primary { background: #0c66e4; color: #fff; }
 .primary:hover:not(:disabled) { background: #0055cc; }
 .danger { background: #c9372c; color: #fff; }
 .danger:hover:not(:disabled) { background: #ae2a19; }
 .secondary { border-color: #b7b9c0; background: #fff; color: #172b4d; }
 .secondary:hover:not(:disabled) { background: #f1f2f4; }
+.full-width { width: 100%; margin-top: 14px; }
+.settings-button { margin-top: 14px; }
 .hidden { display: none !important; }
