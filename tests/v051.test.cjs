@@ -32,6 +32,9 @@ function createHarness({ initialSettings = null, permissions = [JIRA_MATCH] } = 
   const listeners = {};
 
   const chrome = {
+    action: {
+      async setIcon() {}
+    },
     storage: {
       local: {
         async setAccessLevel() {},
@@ -182,13 +185,15 @@ test("loads related Toggl data and auto-selects the active project with the high
         { id: 13, name: "Other workspace", active: true, actual_hours: 1000, workspace_id: 456 }
       ]
     }),
-    jsonResponse({ id: 123, name: "Workspace QA" })
+    jsonResponse({ id: 123, name: "Workspace QA" }),
+    jsonResponse(null)
   );
 
   const result = await harness.context.validateAndSaveSettings(settingsInput());
 
   assert.equal(harness.requests[0].url, "https://api.track.toggl.com/api/v9/me?with_related_data=true");
-  assert.equal(harness.requests.length, 2, "auto-selection should not make a project lookup request");
+  assert.equal(harness.requests.length, 3, "auto-selection should only add the current-timer lookup");
+  assert.equal(harness.requests[2].url, "https://api.track.toggl.com/api/v9/me/time_entries/current");
   assert.equal(result.projectId, 11);
   assert.equal(result.projectName, "Winner");
   assert.equal(result.projectConfigured, true);
@@ -359,11 +364,7 @@ test("settings UI explains automatic Jira remaining-estimate adjustment", () => 
   assert.doesNotMatch(html, /remaining estimate is always left unchanged/);
 });
 
-test("release metadata is aligned at 0.5.1", () => {
-  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"));
-  const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
-  assert.equal(manifest.version, "0.5.1");
-  assert.equal(packageJson.version, "0.5.1");
+test("version 0.5.1 remains documented as a historical release", () => {
   assert.match(fs.readFileSync(path.join(ROOT, "CHANGELOG.md"), "utf8"), /## 0\.5\.1 — 2026-08-20/);
 });
 

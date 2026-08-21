@@ -133,14 +133,46 @@ test("increments a running Worked today value locally after the initial request"
   }, { togglConfigured: true, projectId: 456 });
 
   const calculatedAt = Date.parse("2026-08-20T10:30:00Z");
-  const total = context.getLiveWorkedTodaySeconds({
+  const total = context.getLiveWorkedSeconds({
     status: "ok",
     totalSeconds: 3600,
     runningEntryId: 91,
     calculatedAt: new Date(calculatedAt).toISOString()
-  }, calculatedAt + 125_000);
+  }, "totalSeconds", calculatedAt + 125_000);
 
   assert.equal(total, 3725);
+});
+
+test("renders and advances the current Monday-to-Sunday total beside today", () => {
+  const { context, getElement } = createPopupHarness();
+  context.renderCurrent({
+    id: 91,
+    description: "Running",
+    start: "2026-08-20T10:00:00Z",
+    stop: null,
+    billable: false
+  }, { togglConfigured: true, projectId: 456 });
+
+  const calculatedAt = Date.parse("2026-08-20T10:30:00Z");
+  const summary = {
+    status: "ok",
+    totalSeconds: 3600,
+    weekTotalSeconds: 10800,
+    runningEntryId: null,
+    calculatedAt: new Date(calculatedAt).toISOString()
+  };
+  context.renderWorkedToday(summary);
+
+  assert.equal(getElement("worked-today-value").textContent, "1h");
+  assert.equal(getElement("worked-week-value").textContent, "3h");
+  assert.equal(
+    context.getLiveWorkedSeconds(
+      { ...summary, runningEntryId: 91 },
+      "weekTotalSeconds",
+      calculatedAt + 125_000
+    ),
+    10925
+  );
 });
 
 test("shows Jira progress below the original estimate", () => {

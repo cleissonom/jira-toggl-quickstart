@@ -16,10 +16,18 @@
         </div>
       </header>
 
-      <section id="worked-today" class="worked-today" aria-labelledby="worked-today-title">
-        <div>
+      <section
+        id="worked-today"
+        class="worked-today"
+        aria-labelledby="worked-today-title worked-week-title"
+      >
+        <div class="worked-period">
           <span id="worked-today-title" class="kicker">Worked today</span>
           <strong id="worked-today-value">Loading…</strong>
+        </div>
+        <div class="worked-period">
+          <span id="worked-week-title" class="kicker">Worked this week</span>
+          <strong id="worked-week-value">Loading…</strong>
         </div>
         <small id="worked-today-message" class="hidden"></small>
       </section>

@@ -2,7 +2,7 @@
   color-scheme: light;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #172b4d;
-  background: #fff;
+  background: transparent;
 }
 
 * { box-sizing: border-box; }
@@ -10,6 +10,9 @@
 body {
   width: 360px;
   margin: 0;
+  overflow: hidden;
+  border-bottom-left-radius: 16px;
+  border-bottom-right-radius: 16px;
   background: #fff;
 }
 
@@ -63,18 +66,23 @@ header span {
 }
 
 .worked-today {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 10px 14px;
   background: #f0f7ff;
   border-color: #b8d5ff;
 }
 
-.worked-today > div {
+.worked-period {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.worked-period + .worked-period {
+  padding-left: 14px;
+  border-left: 1px solid #b8d5ff;
 }
 
 .worked-today strong {
@@ -84,11 +92,10 @@ header span {
 }
 
 .worked-today small {
-  max-width: 180px;
+  grid-column: 1 / -1;
   color: #626f86;
   font-size: 10px;
   line-height: 1.35;
-  text-align: right;
 }
 
 .timer-heading,

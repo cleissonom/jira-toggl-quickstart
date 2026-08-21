@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+## 0.6.0 — 2026-08-21
+
+- Added a Monday–Sunday **Worked this week** total beside **Worked today**, using one Toggl request and local live updates for a running timer.
+- Added automatic toolbar icon switching when a Toggl timer starts, stops, or is restored after browser startup.
+- Rounded both toolbar icon states and added a high-contrast black, cyan, and near-white running-state palette with a play symbol.
+- Rounded the popup's bottom-left and bottom-right corners by 16 px.
+- Updated GitHub Releases to prepend the matching changelog section before the generated comparison notes.
+
 ## 0.5.1 — 2026-08-20
 
 - Made the Toggl project ID optional again and added automatic selection from the related project data returned by Toggl.
