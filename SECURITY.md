@@ -16,10 +16,10 @@
 - Jira summary, description, and time-tracking values are returned only to the trusted popup and are not exposed to Jira content scripts or unrelated pages.
 - The ADF-to-Markdown converter is local, processes unknown nodes through child content, and does not execute Jira HTML or remote code.
 - Clipboard writing occurs only from the explicit popup button click through `navigator.clipboard.writeText()`; no broad clipboard permission is requested.
-- The raw Toggl entries used for **Worked today** are aggregated in the service worker and are neither persisted nor returned to untrusted contexts.
+- The raw Toggl entries used for **Worked today** and **Worked this week** are aggregated in the service worker and are neither persisted nor returned to untrusted contexts.
 - Work Log synchronization uses a locally stored Toggl-entry association and a Jira Work Log property to reduce duplicate submissions, and asks Jira to adjust the remaining estimate automatically.
 - Failed Work Log requests are retained locally for explicit retry instead of being sent to another service.
-- Daily-total, Jira-progress, and clipboard failures are isolated from the primary timer controls, so an existing timer remains stoppable.
+- Time-total, Jira-progress, and clipboard failures are isolated from the primary timer controls, so an existing timer remains stoppable.
 - The Toggl token is never included in Jira requests, Work Log comments, Work Log properties, or clipboard content.
 - The extension contains no remote JavaScript, `eval`, `new Function`, analytics SDK, third-party runtime dependency, or backend integration.
 - Jira host access is optional and requested for one exact HTTPS origin at setup time.

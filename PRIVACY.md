@@ -17,7 +17,7 @@ The extension stores the following values in `chrome.storage.local`:
 
 These values remain in the current Chrome profile unless the user removes them, clears extension data, or uninstalls the extension. Selecting **Remove settings** also removes the Work Log association and retry state.
 
-The extension does not persist the list of Toggl entries retrieved for **Worked today**, the calculated daily total, Jira issue descriptions loaded for the popup, or clipboard documents. Jira metadata used by the content script to render a timer description remains only in the Jira page's short-lived in-memory cache. Manual timer descriptions are not persisted by the extension. A rendered description may be retained in local Work Log state only when it belongs to a timer started from the Jira button.
+The extension does not persist the list of Toggl entries retrieved for **Worked today** and **Worked this week**, the calculated totals, Jira issue descriptions loaded for the popup, or clipboard documents. Jira metadata used by the content script to render a timer description remains only in the Jira page's short-lived in-memory cache. Manual timer descriptions are not persisted by the extension. A rendered description may be retained in local Work Log state only when it belongs to a timer started from the Jira button.
 
 ## Network requests
 
@@ -35,11 +35,11 @@ Toggl requests are used to:
 - read related project metadata, including active status and `actual_hours`, to choose an optional project when the field is blank;
 - validate an explicitly entered project against the selected workspace;
 - read the current running entry;
-- read the current user's entries from browser-local midnight through the current time for **Worked today**;
+- read the current user's entries from the browser-local Sunday preceding the current week through now for **Worked today** and **Worked this week**, allowing Sunday entries that cross into Monday to be clipped correctly;
 - create new entries with `project_id` when a project is selected, or without it when no active project is available; and
 - stop or reconcile entries.
 
-The daily request may return entries from multiple Toggl projects or workspaces because the popup total represents all work by the current user during the local day. The service worker calculates the total locally and returns only the aggregate and minimal running-entry metadata to the popup; it does not store or disclose the raw daily response.
+The weekly request may return entries from multiple Toggl projects or workspaces because the popup totals represent all work by the current user during the local day and Monday–Sunday week. The service worker calculates both totals locally and returns only the aggregates and minimal running-entry metadata to the popup; it does not store or disclose the raw response.
 
 ### Jira requests
 
@@ -73,4 +73,4 @@ The extension's use and transfer of user data is limited to providing this funct
 
 Users can disable Work Log synchronization without disabling Toggl timers. Pending records remain visible in the popup so the user can explicitly retry them. **Remove settings**, clearing extension data, or uninstalling the extension removes the local queue and saved configuration.
 
-Toggl time entries and Jira Work Logs already created belong to the user's accounts and must be managed or deleted in Toggl or Jira. Version 0.5.1 does not automatically propagate later edits or deletions between the two services.
+Toggl time entries and Jira Work Logs already created belong to the user's accounts and must be managed or deleted in Toggl or Jira. The extension does not automatically propagate later edits or deletions between the two services.

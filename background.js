@@ -11,6 +11,18 @@ const MAX_WORKLOG_RECORDS = 200;
 const MIN_PLAUSIBLE_UNIX_SECONDS = 1_000_000_000;
 const WORKLOG_RECONCILE_LIMIT = 5;
 const WORKLOG_API_VERSIONS = Object.freeze(["3", "2", "latest"]);
+const DEFAULT_ACTION_ICON_PATHS = Object.freeze({
+  16: "icons/icon16.png",
+  32: "icons/icon32.png",
+  48: "icons/icon48.png",
+  128: "icons/icon128.png"
+});
+const RUNNING_ACTION_ICON_PATHS = Object.freeze({
+  16: "icons/icon-running16.png",
+  32: "icons/icon-running32.png",
+  48: "icons/icon-running48.png",
+  128: "icons/icon-running128.png"
+});
 const JIRA_ISSUE_KEY_PATTERN = /\b([A-Z][A-Z0-9_]*-\d+)\b/i;
 const JIRA_INSIGHT_FIELDS = Object.freeze([
   "summary",
@@ -63,6 +75,7 @@ const DEFAULT_SETTINGS = Object.freeze({
 });
 
 const worklogSyncLocks = new Map();
+let actionIconRevision = 0;
 
 class UserFacingError extends Error {
   constructor(code, message) {
@@ -84,6 +97,7 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
 
 chrome.runtime.onStartup.addListener(() => {
   scheduleContentScriptSync();
+  scheduleActionIconSync();
 });
 
 chrome.permissions.onAdded.addListener(() => {
@@ -106,6 +120,7 @@ async function initializeExtension(reason) {
   try {
     const settings = await getSettings();
     await syncJiraContentScript(settings);
+    scheduleActionIconSync(settings);
 
     if (
       reason === "install" ||
@@ -418,6 +433,8 @@ async function validateAndSaveSettings(input) {
   }
 
   await chrome.storage.local.set({ [STORAGE_KEY]: settings });
+  await setActionIcon(false);
+  await syncActionIcon(settings);
 
   if (existing.jiraOrigin && existing.jiraOrigin !== jiraOrigin) {
     await clearWorklogState();
@@ -502,6 +519,7 @@ async function clearSettings() {
 
   await unregisterJiraContentScript().catch(() => undefined);
   await chrome.storage.local.remove([STORAGE_KEY, WORKLOG_STATE_KEY]);
+  await setActionIcon(false);
 
   if (existing.jiraOrigin) {
     await removeJiraHostPermission(existing.jiraOrigin);
@@ -521,7 +539,8 @@ async function getPopupState() {
       workedToday: {
         status: "not-configured",
         totalSeconds: null,
-        message: "Connect Toggl to load today's total."
+        weekTotalSeconds: null,
+        message: "Connect Toggl to load your time totals."
       },
       jira: { status: "not-applicable" },
       worklogs: await getWorklogSummary(settings)
@@ -635,6 +654,7 @@ async function startDescriptionTimer(description, settings, issue = null) {
 
   const entry = sanitizeEntry(created) ||
     sanitizeEntry(await getCurrentTimeEntry(settings.apiToken));
+  await setActionIcon(Boolean(entry));
 
   if (issue && entry) {
     await trackJiraTimer(entry, issue, description, settings);
@@ -722,17 +742,51 @@ async function getTogglAccessSettings() {
   return settings;
 }
 
+async function setActionIcon(running, revision = null) {
+  const updateRevision = revision ?? ++actionIconRevision;
+  if (updateRevision !== actionIconRevision) {
+    return;
+  }
+
+  const path = running
+    ? RUNNING_ACTION_ICON_PATHS
+    : DEFAULT_ACTION_ICON_PATHS;
+
+  try {
+    await chrome.action.setIcon({ path });
+  } catch (error) {
+    console.error("Could not update the Jira → Toggl toolbar icon.", error);
+  }
+}
+
+async function syncActionIcon(settingsInput = null) {
+  const settings = settingsInput || (await getSettings());
+  if (!settings.apiToken) {
+    await setActionIcon(false);
+    return;
+  }
+
+  await getCurrentTimeEntry(settings.apiToken).catch(() => undefined);
+}
+
+function scheduleActionIconSync(settings = null) {
+  void syncActionIcon(settings).catch((error) => {
+    console.error("Could not synchronize the Jira → Toggl toolbar icon.", error);
+  });
+}
+
 async function getCurrentTimeEntry(apiToken) {
+  const iconRevision = ++actionIconRevision;
   const entry = await togglRequest("/api/v9/me/time_entries/current", {
     apiToken,
     notFoundAsNull: true
   });
 
-  if (!entry || typeof entry !== "object" || !entry.id) {
-    return null;
-  }
-
-  return entry;
+  const current = entry && typeof entry === "object" && entry.id
+    ? entry
+    : null;
+  await setActionIcon(Boolean(current), iconRevision);
+  return current;
 }
 
 async function getWorkedTodaySummary(apiToken, currentEntry, nowInput = new Date()) {
@@ -740,35 +794,45 @@ async function getWorkedTodaySummary(apiToken, currentEntry, nowInput = new Date
 
   try {
     const entries = await togglRequest(
-      `/api/v9/me/time_entries?start_date=${encodeURIComponent(interval.start)}&end_date=${encodeURIComponent(interval.end)}`,
+      `/api/v9/me/time_entries?start_date=${encodeURIComponent(interval.queryStart)}&end_date=${encodeURIComponent(interval.end)}`,
       { apiToken }
     );
-    const totalSeconds = calculateDailyWorkedSeconds(
-      Array.isArray(entries) ? entries : [],
-      currentEntry,
-      interval.startMs,
-      interval.endMs
-    );
-
-    return {
-      status: "ok",
-      totalSeconds,
-      calculatedAt: interval.end,
-      dayStart: interval.start,
-      runningEntryId: isRunningTimeEntry(currentEntry)
-        ? Number(currentEntry.id) || null
-        : null
-    };
+    return buildWorkedSummary(entries, currentEntry, interval);
   } catch {
-    return {
-      status: "error",
-      totalSeconds: null,
-      calculatedAt: interval.end,
-      dayStart: interval.start,
-      runningEntryId: null,
-      message: "Worked today is temporarily unavailable. Timer controls still work."
-    };
+    return buildWorkedSummaryError(interval);
   }
+}
+
+function buildWorkedSummary(entries, currentEntry, interval) {
+  const timeEntries = Array.isArray(entries) ? entries : [];
+  return {
+    status: "ok",
+    totalSeconds: calculateDailyWorkedSeconds(
+      timeEntries, currentEntry, interval.startMs, interval.endMs
+    ),
+    weekTotalSeconds: calculateDailyWorkedSeconds(
+      timeEntries, currentEntry, interval.weekStartMs, interval.endMs
+    ),
+    calculatedAt: interval.end,
+    dayStart: interval.start,
+    weekStart: interval.weekStart,
+    runningEntryId: isRunningTimeEntry(currentEntry)
+      ? Number(currentEntry.id) || null
+      : null
+  };
+}
+
+function buildWorkedSummaryError(interval) {
+  return {
+    status: "error",
+    totalSeconds: null,
+    weekTotalSeconds: null,
+    calculatedAt: interval.end,
+    dayStart: interval.start,
+    weekStart: interval.weekStart,
+    runningEntryId: null,
+    message: "Worked totals are temporarily unavailable. Timer controls still work."
+  };
 }
 
 function getLocalDayInterval(nowInput = new Date()) {
@@ -781,12 +845,27 @@ function getLocalDayInterval(nowInput = new Date()) {
   }
 
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const weekStart = getLocalWeekStart(now);
+  // Toggl filters by entry start, so include Sunday to capture timers crossing Monday.
+  const queryStart = new Date(
+    weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() - 1
+  );
   return {
     start: start.toISOString(),
+    weekStart: weekStart.toISOString(),
+    queryStart: queryStart.toISOString(),
     end: now.toISOString(),
     startMs: start.getTime(),
+    weekStartMs: weekStart.getTime(),
     endMs: now.getTime()
   };
+}
+
+function getLocalWeekStart(now) {
+  const daysSinceMonday = (now.getDay() + 6) % 7;
+  return new Date(
+    now.getFullYear(), now.getMonth(), now.getDate() - daysSinceMonday
+  );
 }
 
 function calculateDailyWorkedSeconds(
@@ -1331,6 +1410,7 @@ async function trackJiraTimer(entry, issue, description, settings) {
 
 async function stopTrackedTimeEntry(current, settings, fallbackIssue = null) {
   const stoppedResponse = await stopTimeEntry(current, settings.apiToken);
+  await setActionIcon(false);
   let stoppedEntry = mergeTimeEntries(current, stoppedResponse);
 
   if (!hasCompletedDuration(stoppedEntry)) {

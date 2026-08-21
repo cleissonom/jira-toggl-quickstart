@@ -9,7 +9,7 @@
 
 > Independent open-source project. Not affiliated with, endorsed by, or sponsored by Atlassian or Toggl.
 
-A lightweight Manifest V3 Chrome extension that starts and stops Toggl Track timers from Jira issues, shows daily Toggl and Jira work insights in the popup, optionally mirrors completed Jira timers into Jira Work Logs, and supports manual Toggl timers.
+A lightweight Manifest V3 Chrome extension that starts and stops Toggl Track timers from Jira issues, shows daily and weekly Toggl totals plus Jira work insights in the popup, optionally mirrors completed Jira timers into Jira Work Logs, and supports manual Toggl timers.
 
 For a Jira issue such as `PROJ-123 — Improve the onboarding workflow`, the default timer description is:
 
@@ -25,7 +25,8 @@ For a Jira issue such as `PROJ-123 — Improve the onboarding workflow`, the def
 - Local retry queue for failed Work Log requests and duplicate prevention through a Jira Work Log property.
 - Nearest-minute or round-up duration handling for Jira Work Logs.
 - Manual timer field in the extension popup when no timer is running.
-- Compact **Worked today** total for the browser-local calendar day, including completed and running Toggl entries from every project and workspace.
+- Compact **Worked today** and **Worked this week** totals for the browser-local day and Monday–Sunday week, including completed and running Toggl entries from every project and workspace.
+- Rounded toolbar icons, including a high-contrast black, cyan, and white running-state toolbar icon while a Toggl timer is active.
 - Jira logged-time progress against the original estimate for the currently running Jira-linked timer.
 - Explicit **Copy Jira title & description** action with local ADF-to-Markdown conversion.
 - Configurable Jira site; paste a site, board, backlog, or issue URL.
@@ -84,7 +85,7 @@ Manual timers use the same saved workspace, optional selected project, Billable 
 
 ### Use the popup insights
 
-The popup shows **Worked today** for the current browser-local calendar day. It requests the current user's Toggl entries from local midnight through the current time, includes completed entries from every project and workspace, and adds the elapsed portion of the running entry without double-counting it. While the popup remains open, a running total advances locally after the initial request rather than repeatedly polling Toggl.
+The popup shows **Worked today** for the current browser-local calendar day and **Worked this week** for the current Monday–Sunday week through now. It requests the current user's Toggl entries from the preceding Sunday midnight through the current time so Sunday entries that cross into Monday are available, then clips the same response to each displayed period. It includes completed entries from every project and workspace and adds the elapsed portion of the running entry without double-counting it. While the popup remains open, both running totals advance locally after the initial request rather than repeatedly polling Toggl.
 
 When the current Toggl entry is linked to a Jira issue, the popup also shows Jira's actual logged time against the original estimate. Time left is calculated as original estimate minus logged time, while a positive over-estimate amount is shown when logged time exceeds the original estimate. Missing estimates and Jira API failures are shown without disabling the Stop timer action.
 
@@ -118,7 +119,7 @@ Requirements on the Jira side:
 - Jira time tracking must be enabled.
 - The user needs **Browse projects** and **Work on issues** permission for the target issue.
 
-Version 0.5.1 performs one-way creation from Toggl to Jira. Later edits or deletions made to an already-synchronized Toggl entry or Jira Work Log are not synchronized bidirectionally.
+Work Log synchronization performs one-way creation from Toggl to Jira. Later edits or deletions made to an already-synchronized Toggl entry or Jira Work Log are not synchronized bidirectionally.
 
 ## Description template variables
 
@@ -171,7 +172,7 @@ Manifest V3 service worker
     ├── validates the configured Jira origin or trusted extension page
     ├── reads protected local settings and Work Log associations
     ├── starts, reads, and stops Toggl time entries with an optional selected project
-    ├── aggregates the current local day's Toggl time for the popup
+    ├── aggregates the current local day and Monday–Sunday week's Toggl time for the popup
     ├── reads Jira summary, description, and time-tracking fields for the active issue
     ├── converts Jira ADF to Markdown only in the trusted popup flow
     ├── queues completed Jira-linked entries when necessary
@@ -212,7 +213,7 @@ No package installation is required. Run:
 npm run validate
 ```
 
-This command checks JavaScript syntax, validates `manifest.json`, and runs mocked service-worker, popup, and UI contract tests, including optional and automatic project selection, local-day totals, running-entry semantics, Jira progress, ADF-to-Markdown conversion, clipboard states, Work Log creation, retries, duplicate prevention, external-stop reconciliation, and icon dimensions.
+This command checks JavaScript syntax, validates `manifest.json`, and runs mocked service-worker, popup, and UI contract tests, including optional and automatic project selection, local-day and Monday–Sunday totals, running-entry semantics, toolbar icon states, Jira progress, ADF-to-Markdown conversion, clipboard states, Work Log creation, retries, duplicate prevention, external-stop reconciliation, and icon dimensions.
 
 ## Project structure
 
@@ -221,8 +222,8 @@ manifest.json       Manifest V3 configuration and permissions
 background.js       Toggl integration, Jira Work Logs, settings, retry state, and security
 content.js          Jira issue detection, metadata lookup, and floating button
 options.*           Setup page, Work Log preferences, and advanced options
-popup.*             Worked today, current/manual timers, Jira progress/copy, stop, and Work Log retry UI
-icons/              Generated extension icons in 16, 32, 48, and 128 px sizes
+popup.*             Daily/weekly totals, current/manual timers, Jira progress/copy, stop, and Work Log retry UI
+icons/              Default and running extension icons in 16, 32, 48, and 128 px sizes
 tests/              Mocked service-worker and UI contract tests
 PRIVACY.md          Data-handling disclosure
 SECURITY.md         Security design and reporting guidance
@@ -270,7 +271,7 @@ Official references:
 
 - [RELEASING.md](RELEASING.md) describes versioning, tags, and automated GitHub releases.
 - [STORE_LISTING.md](STORE_LISTING.md) contains the Chrome Web Store description, permission justifications, and privacy declarations.
-- A tag such as `v0.5.1` triggers the release workflow, which validates the source and creates a minimal Chrome Web Store ZIP plus its SHA-256 checksum.
+- A tag such as `v0.6.0` triggers the release workflow, which validates the source, creates a minimal Chrome Web Store ZIP plus its SHA-256 checksum, and prepends the matching changelog section to the generated comparison notes.
 
 ## Contributing
 

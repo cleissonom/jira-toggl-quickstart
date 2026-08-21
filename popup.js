@@ -3,6 +3,7 @@
 const workspaceElement = document.getElementById("workspace");
 const workedTodayElement = document.getElementById("worked-today");
 const workedTodayValueElement = document.getElementById("worked-today-value");
+const workedWeekValueElement = document.getElementById("worked-week-value");
 const workedTodayMessageElement = document.getElementById("worked-today-message");
 const timerElement = document.getElementById("timer");
 const descriptionElement = document.getElementById("description");
@@ -74,7 +75,8 @@ async function loadState() {
   if (!response.ok) {
     workspaceElement.textContent = "Connection error";
     workedTodayValueElement.textContent = "—";
-    workedTodayMessageElement.textContent = "Could not load the daily total.";
+    workedWeekValueElement.textContent = "—";
+    workedTodayMessageElement.textContent = "Could not load time totals.";
     workedTodayMessageElement.classList.remove("hidden");
     emptyElement.classList.add("hidden");
     manualElement.classList.add("hidden");
@@ -119,18 +121,26 @@ function renderWorkedToday(summary) {
   workedTodayElement.classList.remove("hidden");
 
   if (currentWorkedToday.status === "ok") {
-    workedTodayValueElement.textContent = formatWorkedDuration(
-      getLiveWorkedTodaySeconds(currentWorkedToday)
-    );
+    renderWorkedValues(currentWorkedToday);
     workedTodayMessageElement.textContent = "";
     workedTodayMessageElement.classList.add("hidden");
     return;
   }
 
   workedTodayValueElement.textContent = "—";
+  workedWeekValueElement.textContent = "—";
   workedTodayMessageElement.textContent = currentWorkedToday.message ||
-    "Worked today is unavailable.";
+    "Worked totals are unavailable.";
   workedTodayMessageElement.classList.remove("hidden");
+}
+
+function renderWorkedValues(summary) {
+  workedTodayValueElement.textContent = formatWorkedDuration(
+    getLiveWorkedSeconds(summary, "totalSeconds")
+  );
+  workedWeekValueElement.textContent = formatWorkedDuration(
+    getLiveWorkedSeconds(summary, "weekTotalSeconds")
+  );
 }
 
 function renderCurrent(entry, settings = currentSettings) {
@@ -447,9 +457,7 @@ function updateLiveValues() {
   updateElapsed();
 
   if (currentWorkedToday?.status === "ok") {
-    workedTodayValueElement.textContent = formatWorkedDuration(
-      getLiveWorkedTodaySeconds(currentWorkedToday)
-    );
+    renderWorkedValues(currentWorkedToday);
 
     const dayStart = Date.parse(currentWorkedToday.dayStart || "");
     if (
@@ -465,8 +473,8 @@ function updateLiveValues() {
   }
 }
 
-function getLiveWorkedTodaySeconds(summary, nowMs = Date.now()) {
-  const total = Math.max(0, Math.floor(Number(summary?.totalSeconds) || 0));
+function getLiveWorkedSeconds(summary, totalKey = "totalSeconds", nowMs = Date.now()) {
+  const total = Math.max(0, Math.floor(Number(summary?.[totalKey]) || 0));
   const runningId = Number(summary?.runningEntryId || 0);
   if (!runningId || Number(currentEntry?.id || 0) !== runningId || currentEntry?.stop) {
     return total;

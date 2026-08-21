@@ -56,12 +56,26 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
+          set -euo pipefail
           version="$(node -p "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')).version")"
           archive="jira-toggl-quickstart-v${version}.zip"
+          changelog="$(
+            awk -v version="${version}" '
+              $1 == "##" && $2 == version { print_section = 1 }
+              print_section && $1 == "##" && $2 != version { exit }
+              print_section { print }
+            ' CHANGELOG.md
+          )"
+          if [[ -z "${changelog}" ]]; then
+            echo "No CHANGELOG.md section found for version ${version}." >&2
+            exit 1
+          fi
           gh release create "${GITHUB_REF_NAME}" \
             "$archive" \
             "${archive}.sha256" \
             --title "${GITHUB_REF_NAME}" \
+            --notes "${changelog}" \
             --generate-notes \
             --verify-tag

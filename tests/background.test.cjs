@@ -56,11 +56,17 @@ function createHarness({
   const registeredScripts = new Map();
   const fetchQueue = [];
   const requests = [];
+  const actionIconUpdates = [];
   const listeners = {};
   let optionsOpenCount = 0;
   let accessLevel = null;
 
   const chrome = {
+    action: {
+      async setIcon({ path: iconPath }) {
+        actionIconUpdates.push(structuredClone(iconPath));
+      }
+    },
     storage: {
       local: {
         async setAccessLevel(value) {
@@ -198,6 +204,7 @@ function createHarness({
     registeredScripts,
     fetchQueue,
     requests,
+    actionIconUpdates,
     listeners,
     get optionsOpenCount() {
       return optionsOpenCount;
@@ -242,12 +249,19 @@ function configuredSettings(overrides = {}) {
   };
 }
 
-test("saves a configurable Jira origin, billable default, and protected Toggl token", async () => {
+test("saves protected Toggl settings and synchronizes an existing running icon", async () => {
   const harness = createHarness({ permissions: [JIRA_MATCH] });
   harness.fetchQueue.push(
     jsonResponse({ default_workspace_id: 123, fullname: "Dev QA" }),
     jsonResponse({ id: 123, name: "Workspace QA" }),
-    jsonResponse({ id: 456, workspace_id: 123, name: "Internal Engineering" })
+    jsonResponse({ id: 456, workspace_id: 123, name: "Internal Engineering" }),
+    jsonResponse({
+      id: 8000,
+      workspace_id: 123,
+      description: "Already running",
+      start: "2026-08-21T12:00:00Z",
+      duration: -1
+    })
   );
 
   const result = await harness.context.handleMessage(
@@ -292,7 +306,7 @@ test("saves a configurable Jira origin, billable default, and protected Toggl to
   assert.deepEqual(script.js, ["content.js"]);
   assert.equal(script.persistAcrossSessions, true);
 
-  assert.equal(harness.requests.length, 3);
+  assert.equal(harness.requests.length, 4);
   assert.equal(
     harness.requests[0].url,
     "https://api.track.toggl.com/api/v9/me?with_related_data=true"
@@ -301,6 +315,8 @@ test("saves a configurable Jira origin, billable default, and protected Toggl to
     harness.requests[0].headers.Authorization,
     `Basic ${btoa("test-token:api_token")}`
   );
+  assert.match(harness.requests[3].url, /\/me\/time_entries\/current$/);
+  assert.equal(harness.actionIconUpdates.at(-1)["16"], "icons/icon-running16.png");
 });
 
 test("starts a Jira timer with the default description and selected billing value", async () => {
@@ -563,6 +579,7 @@ test("clearing settings unregisters the Jira script and removes the saved origin
   assert.equal(Object.hasOwn(harness.storage, WORKLOG_STATE_KEY), false);
   assert.equal(harness.permissionOrigins.has(JIRA_MATCH), false);
   assert.equal(harness.registeredScripts.size, 0);
+  assert.equal(harness.actionIconUpdates.at(-1)["16"], "icons/icon16.png");
 });
 
 
@@ -1067,7 +1084,8 @@ test("automatically selects the most-used active project when Project ID is blan
         { id: 458, workspace_id: 123, name: "Archived", active: false, actual_hours: 40 }
       ]
     }),
-    jsonResponse({ id: 123, name: "Workspace QA" })
+    jsonResponse({ id: 123, name: "Workspace QA" }),
+    jsonResponse(null)
   );
 
   const result = await harness.context.handleMessage(
@@ -1086,7 +1104,8 @@ test("automatically selects the most-used active project when Project ID is blan
   assert.equal(result.configured, true);
   assert.equal(result.projectId, 456);
   assert.equal(result.projectName, "Most used");
-  assert.equal(harness.requests.length, 2);
+  assert.equal(harness.requests.length, 3);
+  assert.match(harness.requests[2].url, /\/me\/time_entries\/current$/);
 });
 
 test("rejects a Toggl project that belongs to a different workspace", async () => {
@@ -1365,6 +1384,151 @@ test("includes daily entries from multiple projects and workspaces", () => {
   );
 });
 
+test("queries a one-day lookback once and clips daily and Monday-week totals", async () => {
+  const harness = createHarness();
+  const now = new Date(2026, 7, 20, 12, 0, 0);
+  const crossingStart = new Date(2026, 7, 16, 23, 30, 0);
+  const crossingStop = new Date(2026, 7, 17, 0, 30, 0);
+  const mondayStart = new Date(2026, 7, 17, 9, 0, 0);
+  const mondayStop = new Date(2026, 7, 17, 10, 0, 0);
+  const todayStart = new Date(2026, 7, 20, 11, 30, 0);
+
+  harness.fetchQueue.push(jsonResponse([
+    {
+      id: 0,
+      start: crossingStart.toISOString(),
+      stop: crossingStop.toISOString(),
+      duration: 3600
+    },
+    {
+      id: 1,
+      start: mondayStart.toISOString(),
+      stop: mondayStop.toISOString(),
+      duration: 3600
+    },
+    {
+      id: 2,
+      start: todayStart.toISOString(),
+      stop: now.toISOString(),
+      duration: 1800
+    }
+  ]));
+
+  const summary = await harness.context.getWorkedTodaySummary(
+    "test-token",
+    null,
+    now
+  );
+
+  assert.equal(summary.status, "ok");
+  assert.equal(summary.totalSeconds, 1800);
+  assert.equal(summary.weekTotalSeconds, 7200);
+  assert.equal(harness.requests.length, 1);
+
+  const expectedWeekStart = new Date(2026, 7, 17).toISOString();
+  const expectedQueryStart = new Date(2026, 7, 16).toISOString();
+  const requestUrl = new URL(harness.requests[0].url);
+  const requestedStart = new Date(requestUrl.searchParams.get("start_date"));
+  assert.equal(summary.weekStart, expectedWeekStart);
+  assert.equal(requestedStart.toISOString(), expectedQueryStart);
+  assert.equal(requestedStart.getDay(), 0);
+  assert.equal(requestedStart.getHours(), 0);
+  assert.equal(requestedStart.getMinutes(), 0);
+  assert.equal(requestUrl.searchParams.get("end_date"), now.toISOString());
+
+  const sunday = harness.context.getLocalDayInterval(new Date(2026, 7, 23, 12));
+  const nextMonday = harness.context.getLocalDayInterval(new Date(2026, 7, 24, 12));
+  assert.equal(sunday.weekStart, expectedWeekStart);
+  assert.equal(nextMonday.weekStart, new Date(2026, 7, 24).toISOString());
+});
+
+test("switches to the running icon on start and restores the default on stop", async () => {
+  const running = {
+    id: 12000,
+    workspace_id: 123,
+    description: "Active timer",
+    start: "2026-08-20T10:00:00Z",
+    duration: -1
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
+  harness.fetchQueue.push(jsonResponse(null), jsonResponse(running));
+
+  await harness.context.handleMessage(
+    { type: "START_MANUAL_TIMER", description: "Active timer" },
+    harness.extensionSender("popup.html")
+  );
+  assert.deepEqual(harness.actionIconUpdates.at(-1), {
+    16: "icons/icon-running16.png",
+    32: "icons/icon-running32.png",
+    48: "icons/icon-running48.png",
+    128: "icons/icon-running128.png"
+  });
+
+  harness.fetchQueue.push(
+    jsonResponse(running),
+    jsonResponse({
+      ...running,
+      stop: "2026-08-20T10:30:00Z",
+      duration: 1800
+    })
+  );
+  await harness.context.handleMessage(
+    { type: "STOP_CURRENT_TIMER" },
+    harness.extensionSender("popup.html")
+  );
+  assert.deepEqual(harness.actionIconUpdates.at(-1), {
+    16: "icons/icon16.png",
+    32: "icons/icon32.png",
+    48: "icons/icon48.png",
+    128: "icons/icon128.png"
+  });
+});
+
+test("restores the running icon from Toggl when the browser starts", async () => {
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
+  harness.fetchQueue.push(jsonResponse({
+    id: 12001,
+    workspace_id: 123,
+    description: "Already running",
+    start: "2026-08-20T10:00:00Z",
+    duration: -1
+  }));
+
+  harness.listeners.startup();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.match(harness.requests[0].url, /\/me\/time_entries\/current$/);
+  assert.equal(
+    harness.actionIconUpdates.at(-1)["16"],
+    "icons/icon-running16.png"
+  );
+});
+
+test("does not let a stale timer lookup overwrite a newer icon state", async () => {
+  const harness = createHarness();
+  let resolveCurrent;
+  harness.fetchQueue.push(() => new Promise((resolve) => {
+    resolveCurrent = resolve;
+  }));
+
+  const pendingLookup = harness.context.getCurrentTimeEntry("test-token");
+  await harness.context.setActionIcon(false);
+  resolveCurrent(jsonResponse({
+    id: 12002,
+    start: "2026-08-20T10:00:00Z",
+    duration: -1
+  }));
+  await pendingLookup;
+
+  assert.equal(harness.actionIconUpdates.at(-1)["16"], "icons/icon16.png");
+});
+
 test("a daily-entry API failure does not break current timer controls", async () => {
   const current = {
     id: 12001,
@@ -1393,7 +1557,7 @@ test("a daily-entry API failure does not break current timer controls", async ()
   assert.equal(result.jira.status, "not-applicable");
 });
 
-test("queries all current-user entries between local midnight and now", async () => {
+test("queries current-user entries from the local week lookback through now", async () => {
   const harness = createHarness({
     initialSettings: configuredSettings(),
     permissions: [JIRA_MATCH]
@@ -1406,13 +1570,14 @@ test("queries all current-user entries between local midnight and now", async ()
   );
 
   assert.equal(result.workedToday.status, "ok");
-  const dailyRequest = harness.requests.find((request) =>
+  const weeklyRequest = harness.requests.find((request) =>
     request.url.includes("/api/v9/me/time_entries?")
   );
-  assert.ok(dailyRequest);
-  const url = new URL(dailyRequest.url);
+  assert.ok(weeklyRequest);
+  const url = new URL(weeklyRequest.url);
   const start = new Date(url.searchParams.get("start_date"));
   const end = new Date(url.searchParams.get("end_date"));
+  assert.equal(start.getDay(), 0);
   assert.equal(start.getHours(), 0);
   assert.equal(start.getMinutes(), 0);
   assert.ok(end.getTime() >= start.getTime());
