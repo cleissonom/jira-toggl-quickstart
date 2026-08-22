@@ -323,15 +323,23 @@ test("renders today's appointments with totals and a disabled running action", (
       {
         sourceEntryId: 103,
         issueKey: null,
-        description: "[PROJ-456] Review docs",
+        description: "Review docs",
         totalSeconds: 1800,
+        runningEntryId: null
+      },
+      {
+        sourceEntryId: 104,
+        issueKey: null,
+        linkIssueKey: "ECP-3217",
+        description: "[ECP-3217] Switch Cleanup prompt to use Claude 4.6",
+        totalSeconds: 900,
         runningEntryId: null
       }
     ]
   });
 
   const list = getElement("appointments-list");
-  assert.equal(list.children.length, 2);
+  assert.equal(list.children.length, 3);
   const jiraTitle = findByClass(list.children[0], "appointment-title");
   assert.equal(jiraTitle.tagName, "A");
   assert.equal(jiraTitle.textContent, "Customer onboarding");
@@ -351,6 +359,13 @@ test("renders today's appointments with totals and a disabled running action", (
   assert.equal(manualTitle.tagName, "STRONG");
   assert.equal(manualTitle.getAttribute("href"), null);
   assert.equal(findByClass(list.children[1], "appointment-duration").textContent, "30m");
+  const inferredTitle = findByClass(list.children[2], "appointment-title");
+  assert.equal(inferredTitle.tagName, "A");
+  assert.equal(
+    inferredTitle.getAttribute("href"),
+    "https://team.atlassian.net/browse/ECP-3217"
+  );
+  assert.equal(findByClass(list.children[2], "appointment-duration").textContent, "15m");
 
   assert.equal(
     context.getLiveAppointmentSeconds(

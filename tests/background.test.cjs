@@ -2444,7 +2444,7 @@ test("groups today's Jira and manual appointments from the existing history resp
     { id: 101, description: "Customer onboarding", start: at(20, 10), stop: at(20, 10, 30), duration: 1800 },
     { id: 102, description: " Review docs ", start: at(20, 9), duration: 1200 },
     { id: 103, description: "Review   docs", start: at(20, 11), duration: 600 },
-    { id: 104, description: "[OPS-9] Manually typed", start: at(20, 7), duration: 900 },
+    { id: 104, description: "[ECP-3217] Switch Cleanup prompt to use Claude 4.6", start: at(20, 7), duration: 900 },
     { id: 105, description: "Crossing midnight", start: at(19, 23, 30), stop: at(20, 0, 30), duration: 3600 },
     running
   ];
@@ -2470,8 +2470,17 @@ test("groups today's Jira and manual appointments from the existing history resp
     ["PROJ-123", null, null, "PROJ-9"]
   );
   assert.deepEqual(
+    Array.from(summary.appointments, (item) => item.linkIssueKey),
+    ["PROJ-123", null, "ECP-3217", "PROJ-9"]
+  );
+  assert.deepEqual(
     Array.from(summary.appointments, (item) => item.description),
-    ["Customer onboarding", "Review docs", "[OPS-9] Manually typed", "Crossing midnight"]
+    [
+      "Customer onboarding",
+      "Review docs",
+      "[ECP-3217] Switch Cleanup prompt to use Claude 4.6",
+      "Crossing midnight"
+    ]
   );
   assert.deepEqual(
     Array.from(summary.appointments, (item) => item.totalSeconds),
@@ -2480,7 +2489,12 @@ test("groups today's Jira and manual appointments from the existing history resp
   assert.equal(summary.appointments[0].sourceEntryId, 106);
   assert.equal(summary.appointments[0].runningEntryId, 106);
   assert.equal(summary.appointments[1].sourceEntryId, 103);
-  assert.equal(summary.appointments[2].issueKey, null, "description keys must not create Jira provenance");
+  assert.equal(
+    summary.appointments[2].issueKey,
+    null,
+    "description keys must not create Jira provenance"
+  );
+  assert.equal(summary.appointments[2].linkIssueKey, "ECP-3217");
 });
 
 test("retains capped Jira provenance when Work Log sync is disabled", async () => {

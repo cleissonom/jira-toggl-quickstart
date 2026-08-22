@@ -355,6 +355,9 @@ test("side panel places an accessible settings gear in the title header", () => 
   assert.match(header, /id="settings"/);
   assert.match(header, /aria-label="Open settings"/i);
   assert.match(header, /<svg\b[^>]*aria-hidden="true"/i);
+  assert.match(header, /viewBox="340 140 280 279\.416"/);
+  assert.match(header, /<path\s+d="M620,305\.666v-51\.333l-31\.5-5\.25/);
+  assert.doesNotMatch(header, /<circle\b/i);
   assert.doesNotMatch(html, />\s*Settings\s*<\/button>/i);
   assert.ok(html.indexOf('id="settings"') < html.indexOf('id="worked-today"'));
   assert.match(settingsRule, /margin-left:\s*auto/);
@@ -539,9 +542,11 @@ test("release documentation covers the v0.7.0 through v0.7.2 panel features", ()
   assert.match(store, /Connect Toggl.*accounts\.toggl\.com.*track\.toggl\.com/is);
   assert.match(releasing, /Retry connection/);
   assert.match(changelog, /## 0\.7\.2.*settings.*gear/is);
-  assert.match(readme, /Jira-linked appointment.*opens.*Jira/i);
+  assert.match(readme, /valid Jira key in its description.*plain text/i);
+  assert.match(readme, /inferred from a description is navigation-only/i);
   assert.match(readme, /settings gear/i);
-  assert.match(privacy, /underlined Jira-linked appointment/i);
+  assert.match(privacy, /underlined Jira appointment/i);
+  assert.match(privacy, /Description-derived keys are navigation-only/i);
   assert.match(security, /appointment links.*validated HTTPS Jira origin/i);
   assert.match(store, /Jira-linked appointment.*open.*Jira/i);
   assert.match(releasing, /top-right settings gear/i);

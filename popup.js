@@ -208,11 +208,12 @@ function createAppointmentCopy(appointment) {
   const title = createAppointmentTitle(appointment);
   const meta = document.createElement("span");
   meta.className = "appointment-meta";
-  if (appointment.issueKey) {
-    const issueKey = document.createElement("span");
-    issueKey.className = "appointment-key";
-    issueKey.textContent = appointment.issueKey;
-    meta.appendChild(issueKey);
+  const linkIssueKey = getAppointmentLinkIssueKey(appointment);
+  if (linkIssueKey) {
+    const issueKeyElement = document.createElement("span");
+    issueKeyElement.className = "appointment-key";
+    issueKeyElement.textContent = linkIssueKey;
+    meta.appendChild(issueKeyElement);
   }
   const duration = document.createElement("span");
   duration.className = "appointment-duration";
@@ -222,13 +223,13 @@ function createAppointmentCopy(appointment) {
 }
 
 function createAppointmentTitle(appointment) {
-  const jiraUrl = buildJiraIssueUrl(appointment.issueKey, currentSettings?.jiraOrigin);
+  const issueKey = getAppointmentLinkIssueKey(appointment);
+  const jiraUrl = buildJiraIssueUrl(issueKey, currentSettings?.jiraOrigin);
   const description = appointment.description || "No description";
   const title = document.createElement(jiraUrl ? "a" : "strong");
   title.className = `appointment-title${jiraUrl ? " appointment-link" : ""}`;
   title.textContent = description;
   if (jiraUrl) {
-    const issueKey = String(appointment.issueKey).trim().toUpperCase();
     title.setAttribute("href", jiraUrl);
     title.setAttribute("target", "_blank");
     title.setAttribute("rel", "noopener noreferrer");
@@ -238,6 +239,14 @@ function createAppointmentTitle(appointment) {
     );
   }
   return title;
+}
+
+function getAppointmentLinkIssueKey(appointment) {
+  for (const value of [appointment?.issueKey, appointment?.linkIssueKey]) {
+    const key = String(value || "").trim().toUpperCase();
+    if (JIRA_ISSUE_KEY_PATTERN.test(key)) return key;
+  }
+  return "";
 }
 
 function buildJiraIssueUrl(issueKey, jiraOrigin) {

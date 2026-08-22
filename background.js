@@ -1383,10 +1383,13 @@ function getAppointmentIdentity(entry, state, jiraOrigin) {
     return null;
   }
   const issueKey = getAssociatedIssueKey(sourceEntryId, state, jiraOrigin);
+  // This fallback is navigation-only; replay and Work Logs still use issueKey.
+  const linkIssueKey = issueKey || extractJiraIssueKey(description);
   return {
     groupKey: issueKey ? `jira:${issueKey}` : `description:${description}`,
     sourceEntryId,
     issueKey,
+    linkIssueKey,
     description
   };
 }
@@ -1395,6 +1398,7 @@ function createAppointmentGroup(identity) {
   return {
     sourceEntryId: identity.sourceEntryId,
     issueKey: identity.issueKey,
+    linkIssueKey: identity.linkIssueKey,
     description: identity.description,
     totalSeconds: 0,
     runningEntryId: null,

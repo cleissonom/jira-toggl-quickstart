@@ -5,7 +5,7 @@
 ## 0.7.2 — 2026-08-22
 
 - Replaced the full-width bottom Settings button with an accessible settings gear in the side-panel title header.
-- Made retained Jira-linked appointment names open the exact configured Jira issue in a new tab, with underlined text and blue hover and keyboard-focus feedback; normal appointments remain plain text.
+- Made Jira appointment names recognized from retained associations or valid issue keys in their descriptions open the exact configured Jira issue in a new tab, with underlined text and blue hover and keyboard-focus feedback; description inference remains navigation-only.
 
 ## 0.7.1 — 2026-08-22
 
