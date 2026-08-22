@@ -1,6 +1,6 @@
 {
   "name": "jira-toggl-quickstart",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "private": true,
   "description": "Chrome extension for Jira and Toggl timers, today's replayable entries, flexible Jira controls, and optional Work Log sync.",
   "scripts": {

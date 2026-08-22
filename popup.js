@@ -1,5 +1,6 @@
 "use strict";
 
+const JIRA_ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]*-\d+$/;
 const workspaceElement = document.getElementById("workspace");
 const workedTodayElement = document.getElementById("worked-today");
 const workedTodayValueElement = document.getElementById("worked-today-value");
@@ -204,9 +205,7 @@ function createAppointmentItem(appointment, index) {
 function createAppointmentCopy(appointment) {
   const container = document.createElement("div");
   container.className = "appointment-copy";
-  const title = document.createElement("strong");
-  title.className = "appointment-title";
-  title.textContent = appointment.description || "No description";
+  const title = createAppointmentTitle(appointment);
   const meta = document.createElement("span");
   meta.className = "appointment-meta";
   if (appointment.issueKey) {
@@ -220,6 +219,41 @@ function createAppointmentCopy(appointment) {
   meta.appendChild(duration);
   container.append(title, meta);
   return { container, duration };
+}
+
+function createAppointmentTitle(appointment) {
+  const jiraUrl = buildJiraIssueUrl(appointment.issueKey, currentSettings?.jiraOrigin);
+  const description = appointment.description || "No description";
+  const title = document.createElement(jiraUrl ? "a" : "strong");
+  title.className = `appointment-title${jiraUrl ? " appointment-link" : ""}`;
+  title.textContent = description;
+  if (jiraUrl) {
+    const issueKey = String(appointment.issueKey).trim().toUpperCase();
+    title.setAttribute("href", jiraUrl);
+    title.setAttribute("target", "_blank");
+    title.setAttribute("rel", "noopener noreferrer");
+    title.setAttribute(
+      "aria-label",
+      `${description} — open ${issueKey} in Jira in a new tab`
+    );
+  }
+  return title;
+}
+
+function buildJiraIssueUrl(issueKey, jiraOrigin) {
+  const key = String(issueKey || "").trim().toUpperCase();
+  if (!JIRA_ISSUE_KEY_PATTERN.test(key)) return "";
+
+  try {
+    const origin = new URL(String(jiraOrigin || "").trim());
+    const hasOnlyOrigin = origin.pathname === "/" && !origin.search && !origin.hash;
+    if (origin.protocol !== "https:" || origin.username || origin.password || !hasOnlyOrigin) {
+      return "";
+    }
+    return `${origin.origin}/browse/${encodeURIComponent(key)}`;
+  } catch {
+    return "";
+  }
 }
 
 function updateAppointmentValues() {

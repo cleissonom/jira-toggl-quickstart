@@ -10,10 +10,32 @@
     <main>
       <header>
         <img class="logo" src="icons/icon32.png" alt="" aria-hidden="true" />
-        <div>
+        <div class="header-copy">
           <strong>Jira → Toggl</strong>
           <span id="workspace">Loading…</span>
         </div>
+        <button
+          id="settings"
+          class="settings-button"
+          type="button"
+          aria-label="Open settings"
+          title="Open settings"
+        >
+          <svg
+            class="settings-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+            stroke-linecap="round"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <circle cx="12" cy="12" r="6" />
+            <circle cx="12" cy="12" r="2" />
+            <path d="M12 2v4M12 18v4M2 12h4M18 12h4M4.22 4.22l3.54 3.54M16.24 16.24l3.54 3.54M19.78 4.22l-3.54 3.54M7.76 16.24l-3.54 3.54" />
+          </svg>
+        </button>
       </header>
 
       <section
@@ -99,7 +121,6 @@
       <p id="notice" class="notice hidden" role="status" aria-live="polite"></p>
       <p id="error" class="error hidden" role="alert"></p>
 
-      <button id="settings" class="secondary full-width settings-button" type="button">Settings</button>
     </main>
 
     <script src="popup.js"></script>

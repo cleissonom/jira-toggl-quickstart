@@ -26,7 +26,8 @@ For a Jira issue such as `PROJ-123 — Improve the onboarding workflow`, the def
 - Nearest-minute or round-up duration handling for Jira Work Logs.
 - Manual timer field in the extension side panel when no timer is running.
 - Compact **Worked today** and **Worked this week** totals for the browser-local day and Monday–Sunday week, including completed and running Toggl entries from every project and workspace.
-- A live **Today's appointments** list with per-appointment totals and a **Play** action that safely switches from the current timer.
+- A live **Today's appointments** list with per-appointment totals, links from retained Jira work to its issue, and a **Play** action that safely switches from the current timer.
+- An accessible settings gear in the side-panel title header.
 - Rounded toolbar icons, including a high-contrast black, cyan, and white running-state toolbar icon while a Toggl timer is active.
 - Jira logged-time progress against the original estimate for the currently running Jira-linked timer.
 - Explicit **Copy Jira title & description** action beside the floating Jira timer button, with local ADF-to-Markdown conversion.
@@ -98,13 +99,13 @@ Manual timers use the same saved workspace, optional selected project, Billable 
 
 Clicking the extension's toolbar icon toggles a persistent Chrome side panel. It shows **Worked today** for the current browser-local calendar day and **Worked this week** for the current Monday–Sunday week through now. It requests the current user's Toggl entries from the preceding Sunday midnight through the current time so Sunday entries that cross into Monday are available, then clips the same response to each displayed period. It includes returned entries across projects and workspaces and adds the elapsed portion of the running entry without double-counting it. Toggl filters this endpoint by entry start and caps its response at 1,000, so a stopped entry begun before the lookback or an unusually high-volume week may be omitted. While the side panel remains open, both running totals advance locally after the initial request rather than repeatedly polling Toggl.
 
-The same response powers **Today's appointments**. Known Jira sessions are grouped by their retained issue association; other named entries are grouped by normalized description. Each row shows its total for the local day. **Play** validates the source entry, stops any different current timer, and starts the selected description with the currently configured workspace, optional project, and Billable default. The running row and its total update locally. The side panel uses one browser-managed vertical scroll surface for long lists and narrow layouts.
+The same response powers **Today's appointments**. Known Jira sessions are grouped by their retained issue association; other named entries are grouped by normalized description. Each row shows its total for the local day. An underlined Jira-linked appointment name opens the exact Jira issue in a new tab, while normal appointment names remain plain text. **Play** validates the source entry, stops any different current timer, and starts the selected description with the currently configured workspace, optional project, and Billable default. The running row and its total update locally. The side panel uses one browser-managed vertical scroll surface for long lists and narrow layouts.
 
 When Play stops a Jira-linked timer, the normal automatic, confirmation, or retry Work Log path runs before the selected appointment starts. Replaying an appointment with a retained Jira association links the new Toggl entry to the same Jira issue, so its later stop follows the same Work Log behavior. Manual entries—including descriptions that merely look like Jira keys—remain Toggl-only.
 
 When the current Toggl entry is linked to a Jira issue, the side panel also shows Jira's actual logged time against the original estimate. Time left is calculated as original estimate minus logged time, while a positive over-estimate amount is shown when logged time exceeds the original estimate. Missing estimates and Jira API failures are shown without disabling the Stop timer action.
 
-The section order is extension title; **Worked today** and **Worked this week**; current timer or manual start; Jira progress; **Today's appointments**; **Stop timer**; pending Work Logs when present; and **Settings**.
+The section order is extension title with a top-right settings gear; **Worked today** and **Worked this week**; current timer or manual start; Jira progress; **Today's appointments**; **Stop timer**; and pending Work Logs when present.
 
 Users upgrading from v0.6.0 keep their saved settings and default to the existing bottom-right floating position. Profiles without a project can start timers normally; opening and saving Settings can populate the project automatically when related Toggl data contains an eligible active project.
 
@@ -297,7 +298,7 @@ Official references:
 
 - [RELEASING.md](RELEASING.md) describes versioning, tags, and automated GitHub releases.
 - [STORE_LISTING.md](STORE_LISTING.md) contains the Chrome Web Store description, permission justifications, and privacy declarations.
-- A tag such as `v0.7.1` triggers the release workflow, which validates the source, creates a minimal Chrome Web Store ZIP plus its SHA-256 checksum, and prepends the matching changelog section to the generated comparison notes.
+- A tag such as `v0.7.2` triggers the release workflow, which validates the source, creates a minimal Chrome Web Store ZIP plus its SHA-256 checksum, and prepends the matching changelog section to the generated comparison notes.
 
 ## Contributing
 

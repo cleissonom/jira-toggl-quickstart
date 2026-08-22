@@ -20,6 +20,7 @@
 - The floating-button position is restricted to top-left, top-right, bottom-left, or bottom-right before it can affect content-script styles.
 - Unknown timer-description and Work Log-comment variables are rejected when settings are saved.
 - Side-panel Jira insight lookup uses the existing protected association first and only then applies a conservative Jira-key pattern to the current Toggl description.
+- Side-panel appointment links are built only from the validated HTTPS Jira origin and a strict Jira issue key, open in a separate tab with opener access disabled, and are omitted for normal or invalid appointments.
 - Jira progress values are returned only to the trusted side panel. The authorized Jira content script receives only the locally formatted clipboard document for its selected issue, never protected settings or the Toggl token.
 - The ADF-to-Markdown converter is local, processes unknown nodes through child content, and does not execute Jira HTML or remote code.
 - Clipboard writing occurs immediately from the explicit copy click on the configured HTTPS Jira page through `navigator.clipboard.writeText()`; no broad clipboard permission is requested.

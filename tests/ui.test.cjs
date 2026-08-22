@@ -312,14 +312,14 @@ test("running icon uses the high-contrast 0.6.0 palette", () => {
   assert.deepEqual(readPixel(image, 84, 68), [26, 244, 252, 255]);
 });
 
-test("release metadata is set to version 0.7.1", () => {
+test("release metadata is set to version 0.7.2", () => {
   const manifest = JSON.parse(read("manifest.json"));
   const packageJson = JSON.parse(read("package.json"));
-  assert.equal(manifest.version, "0.7.1");
-  assert.equal(packageJson.version, "0.7.1");
+  assert.equal(manifest.version, "0.7.2");
+  assert.equal(packageJson.version, "0.7.2");
   assert.match(manifest.description, /today/i);
-  assert.match(read("CHANGELOG.md"), /## 0\.7\.1 — 2026-08-22/);
-  assert.match(read(".github/ISSUE_TEMPLATE/bug_report.yml"), /placeholder: 0\.7\.1/);
+  assert.match(read("CHANGELOG.md"), /## 0\.7\.2 — 2026-08-22/);
+  assert.match(read(".github/ISSUE_TEMPLATE/bug_report.yml"), /placeholder: 0\.7\.2/);
 });
 
 test("extension stylesheets have balanced blocks and one Work Log settings block", () => {
@@ -344,6 +344,31 @@ test("toolbar action opens a global Chrome side panel", () => {
   assert.equal(manifest.side_panel?.default_path, "popup.html");
   assert.equal(Object.hasOwn(manifest.action, "default_popup"), false);
   assert.match(manifest.action.default_title, /side panel/i);
+});
+
+test("side panel places an accessible settings gear in the title header", () => {
+  const html = read("popup.html");
+  const css = read("popup.css");
+  const header = html.match(/<header>([\s\S]*?)<\/header>/)?.[1] || "";
+  const settingsRule = css.match(/\.settings-button\s*\{([^}]*)\}/)?.[1] || "";
+
+  assert.match(header, /id="settings"/);
+  assert.match(header, /aria-label="Open settings"/i);
+  assert.match(header, /<svg\b[^>]*aria-hidden="true"/i);
+  assert.doesNotMatch(html, />\s*Settings\s*<\/button>/i);
+  assert.ok(html.indexOf('id="settings"') < html.indexOf('id="worked-today"'));
+  assert.match(settingsRule, /margin-left:\s*auto/);
+});
+
+test("Jira appointment names are underlined and turn blue when interactive", () => {
+  const css = read("popup.css");
+  const linkRule = css.match(/\.appointment-link\s*\{([^}]*)\}/)?.[1] || "";
+  const interactiveRule = css.match(
+    /\.appointment-link:hover,\s*\n\.appointment-link:focus-visible\s*\{([^}]*)\}/
+  )?.[1] || "";
+
+  assert.match(linkRule, /text-decoration:\s*underline/);
+  assert.match(interactiveRule, /color:\s*#0c66e4/);
 });
 
 test("side panel is responsive and uses the browser as its single scroll surface", () => {
@@ -383,16 +408,16 @@ test("Toggl Project ID is optional and supports automatic selection", () => {
   assert.doesNotMatch(html, /required-indicator/);
 });
 
-test("side panel presents timer, Jira progress, and today's appointments in the requested order", () => {
+test("side panel presents the settings gear and content in the requested order", () => {
   const html = read("popup.html");
   const order = [
+    'id="settings"',
     'id="worked-today"',
     'id="timer"',
     'id="jira-progress"',
     'id="today-appointments"',
     'id="stop"',
-    'id="worklogs"',
-    'id="settings"'
+    'id="worklogs"'
   ].map((marker) => html.indexOf(marker));
 
   for (const index of order) {
@@ -470,7 +495,7 @@ test("Jira pages prioritize stopping the current issue without requiring a proje
   assert.doesNotMatch(script, /valid Toggl project ID is required/i);
 });
 
-test("release documentation covers the v0.7.0 side panel and v0.7.1 Toggl connection", () => {
+test("release documentation covers the v0.7.0 through v0.7.2 panel features", () => {
   const readme = read("README.md");
   const privacy = read("PRIVACY.md");
   const security = read("SECURITY.md");
@@ -501,7 +526,7 @@ test("release documentation covers the v0.7.0 side panel and v0.7.1 Toggl connec
   assert.match(security, /no remote JavaScript, `eval`, `new Function`/);
   assert.match(store, /No clipboard permission is requested/);
   assert.match(store, /side panel/i);
-  assert.match(releasing, /v0\.7\.1/);
+  assert.match(releasing, /v0\.7\.2/);
   assert.match(releasing, /all four floating-button positions/i);
   assert.match(releasing, /changelog.*generated comparison notes/i);
   assert.match(changelog, /## 0\.7\.1.*Connect Toggl/is);
@@ -513,6 +538,13 @@ test("release documentation covers the v0.7.0 side panel and v0.7.1 Toggl connec
   assert.match(security, /Settings messages cannot provide or replace the token/i);
   assert.match(store, /Connect Toggl.*accounts\.toggl\.com.*track\.toggl\.com/is);
   assert.match(releasing, /Retry connection/);
+  assert.match(changelog, /## 0\.7\.2.*settings.*gear/is);
+  assert.match(readme, /Jira-linked appointment.*opens.*Jira/i);
+  assert.match(readme, /settings gear/i);
+  assert.match(privacy, /underlined Jira-linked appointment/i);
+  assert.match(security, /appointment links.*validated HTTPS Jira origin/i);
+  assert.match(store, /Jira-linked appointment.*open.*Jira/i);
+  assert.match(releasing, /top-right settings gear/i);
 });
 
 test("documentation consistently describes the optional automatic Toggl project", () => {

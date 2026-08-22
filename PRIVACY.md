@@ -58,6 +58,8 @@ Depending on the configured description template, Jira fields read by the conten
 
 When the current Toggl entry can be associated with a Jira issue, the trusted extension service worker may request the issue key, summary, logged time, original estimate, and remaining estimate to show side-panel progress. Separately, when an issue is selected or opened, the authorized Jira content script asks the worker to prepare its summary and description for the adjacent copy action. Jira Cloud Atlassian Document Format is converted to Markdown in the worker, and only the formatted document is returned to that content script. Jira issue content is written to the clipboard only after the user explicitly clicks **Copy Jira title & description**.
 
+Clicking an underlined Jira-linked appointment name opens the configured Jira origin at `/browse/{issueKey}` in a new tab. The link is built locally from the saved HTTPS Jira origin and retained issue association. Normal appointments are not linked, and displaying the link does not add a permission or background request.
+
 When Work Log synchronization is enabled, the extension sends the target issue key in the Jira request URL and sends the timer start time, duration, optional configured comment, and a property containing the Toggl time-entry ID and workspace ID to the configured Jira site. Jira is instructed to adjust the remaining estimate automatically for the new Work Log. Before creating a Work Log, the extension may read existing Work Logs and their properties to reduce duplicate submissions.
 
 No browsing history, Jira issue data, Toggl time entries, manually entered descriptions, tokens, clipboard content, Work Log data, or retry records are sent to the extension author or any separate service.

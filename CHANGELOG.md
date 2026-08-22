@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.7.2 — 2026-08-22
+
+- Replaced the full-width bottom Settings button with an accessible settings gear in the side-panel title header.
+- Made retained Jira-linked appointment names open the exact configured Jira issue in a new tab, with underlined text and blue hover and keyboard-focus feedback; normal appointments remain plain text.
+
 ## 0.7.1 — 2026-08-22
 
 - Replaced manual Toggl API-token entry with **Connect Toggl**, which requests exact optional Toggl Accounts and Track access, confirms the existing account session, retrieves the token from the signed-in Track web profile, validates it through the public API, and stores it only in protected local extension storage.

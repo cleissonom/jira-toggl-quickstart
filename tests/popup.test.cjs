@@ -42,8 +42,9 @@ class FakeClassList {
 }
 
 class FakeElement {
-  constructor(id = "") {
+  constructor(id = "", tagName = "div") {
     this.id = id;
+    this.tagName = String(tagName).toUpperCase();
     this.textContent = "";
     this.className = "";
     this.disabled = false;
@@ -83,7 +84,10 @@ class FakeElement {
   focus() {}
 }
 
-function createPopupHarness({ runtimeSendMessage } = {}) {
+function createPopupHarness({
+  runtimeSendMessage,
+  openOptionsPage = () => Promise.resolve()
+} = {}) {
   const elements = new Map();
   const documentListeners = new Map();
   const runtimeListeners = new Map();
@@ -99,10 +103,11 @@ function createPopupHarness({ runtimeSendMessage } = {}) {
     Math,
     Number,
     String,
+    URL,
     Promise,
     document: {
       getElementById: getElement,
-      createElement: () => new FakeElement(),
+      createElement: (tagName) => new FakeElement("", tagName),
       visibilityState: "visible",
       addEventListener(type, listener) {
         documentListeners.set(type, listener);
@@ -118,7 +123,7 @@ function createPopupHarness({ runtimeSendMessage } = {}) {
     },
     chrome: {
       runtime: {
-        openOptionsPage: () => Promise.resolve(),
+        openOptionsPage,
         sendMessage: runtimeSendMessage || (() => new Promise(() => undefined)),
         onMessage: {
           addListener(listener) {
@@ -300,7 +305,10 @@ test("renders today's appointments with totals and a disabled running action", (
     description: "Customer onboarding",
     start: "2026-08-20T11:30:00Z",
     duration: -1
-  }, { togglConfigured: true });
+  }, {
+    togglConfigured: true,
+    jiraOrigin: "https://team.atlassian.net"
+  });
   context.renderAppointments({
     status: "ok",
     calculatedAt: new Date(calculatedAt).toISOString(),
@@ -315,7 +323,7 @@ test("renders today's appointments with totals and a disabled running action", (
       {
         sourceEntryId: 103,
         issueKey: null,
-        description: "Review docs",
+        description: "[PROJ-456] Review docs",
         totalSeconds: 1800,
         runningEntryId: null
       }
@@ -324,12 +332,24 @@ test("renders today's appointments with totals and a disabled running action", (
 
   const list = getElement("appointments-list");
   assert.equal(list.children.length, 2);
-  assert.equal(findByClass(list.children[0], "appointment-title").textContent, "Customer onboarding");
+  const jiraTitle = findByClass(list.children[0], "appointment-title");
+  assert.equal(jiraTitle.tagName, "A");
+  assert.equal(jiraTitle.textContent, "Customer onboarding");
+  assert.equal(jiraTitle.getAttribute("href"), "https://team.atlassian.net/browse/PROJ-123");
+  assert.equal(jiraTitle.getAttribute("target"), "_blank");
+  assert.equal(jiraTitle.getAttribute("rel"), "noopener noreferrer");
+  assert.equal(
+    jiraTitle.getAttribute("aria-label"),
+    "Customer onboarding — open PROJ-123 in Jira in a new tab"
+  );
   assert.equal(findByClass(list.children[0], "appointment-duration").textContent, "2h");
   const runningButton = findByClass(list.children[0], "appointment-play");
   assert.equal(runningButton.textContent, "Running");
   assert.equal(runningButton.disabled, true);
   assert.match(runningButton.getAttribute("aria-label"), /PROJ-123.*running/i);
+  const manualTitle = findByClass(list.children[1], "appointment-title");
+  assert.equal(manualTitle.tagName, "STRONG");
+  assert.equal(manualTitle.getAttribute("href"), null);
   assert.equal(findByClass(list.children[1], "appointment-duration").textContent, "30m");
 
   assert.equal(
@@ -340,6 +360,32 @@ test("renders today's appointments with totals and a disabled running action", (
     ),
     7325
   );
+});
+
+test("rejects unsafe or incomplete Jira appointment link inputs", () => {
+  const { context } = createPopupHarness();
+
+  assert.equal(
+    context.buildJiraIssueUrl("PROJ-123", "https://team.atlassian.net"),
+    "https://team.atlassian.net/browse/PROJ-123"
+  );
+  assert.equal(context.buildJiraIssueUrl("../admin", "https://team.atlassian.net"), "");
+  assert.equal(context.buildJiraIssueUrl("PROJ-123", "http://team.atlassian.net"), "");
+  assert.equal(context.buildJiraIssueUrl("PROJ-123", ""), "");
+});
+
+test("the settings control opens the extension options page", async () => {
+  let opened = 0;
+  const { getElement } = createPopupHarness({
+    openOptionsPage: async () => {
+      opened += 1;
+    }
+  });
+
+  getElement("settings").listeners.get("click")();
+  await flushTasks();
+
+  assert.equal(opened, 1);
 });
 
 test("plays an appointment by source ID and reloads the side panel state", async () => {

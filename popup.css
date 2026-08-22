@@ -26,9 +26,10 @@ header {
   border-bottom: 1px solid #dfe1e6;
 }
 
-header > div:last-child {
+.header-copy {
   display: flex;
   min-width: 0;
+  flex: 1;
   flex-direction: column;
   gap: 2px;
 }
@@ -41,6 +42,27 @@ header span {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.settings-button {
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  margin-left: auto;
+  padding: 7px;
+  border-color: transparent;
+  background: transparent;
+  color: #44546f;
+}
+
+.settings-button:hover:not(:disabled) {
+  background: #f1f2f4;
+  color: #0c66e4;
+}
+
+.settings-icon { width: 22px; height: 22px; }
 
 .logo {
   width: 34px;
@@ -191,12 +213,29 @@ header span {
 }
 
 .appointment-title {
+  display: block;
   overflow: hidden;
   color: #172b4d;
   font-size: 11px;
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.appointment-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.appointment-link:hover,
+.appointment-link:focus-visible {
+  color: #0c66e4;
+}
+
+.appointment-link:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid #172b4d;
+  outline-offset: 2px;
 }
 
 .appointment-meta {
@@ -368,5 +407,4 @@ input:focus-visible {
 .secondary { border-color: #b7b9c0; background: #fff; color: #172b4d; }
 .secondary:hover:not(:disabled) { background: #f1f2f4; }
 .full-width { width: 100%; margin-top: 14px; }
-.settings-button { margin-top: 14px; }
 .hidden { display: none !important; }
