@@ -8,23 +8,31 @@ The extension stores the following values in `chrome.storage.local`:
 
 - Toggl Track API token.
 - Configured Jira origin.
-- Toggl workspace identifier and display name, plus an optional selected project identifier and display name.
+- Toggl account identifier and display name or email, workspace identifier and display name, plus an optional selected project identifier and display name.
 - Billable preference.
 - Description template, automatic timer-switching preference, and floating button position.
 - Optional Jira Work Log settings, including synchronization mode, rounding, and comment template.
 - A bounded set of associations between Jira-linked Toggl time-entry IDs and Jira issue keys while entries are running, pending, completed for replay, or retained for duplicate prevention.
 - Pending Work Log retry information, including issue key, rendered description, start and stop timestamps, duration, Jira origin, retry error, and resulting Jira Work Log ID when available.
 
-These values remain in the current Chrome profile unless the user removes them, clears extension data, or uninstalls the extension. Selecting **Remove settings** also removes the Work Log association and retry state.
+These values remain in the current Chrome profile unless the user removes them, clears extension data, or uninstalls the extension. Selecting **Remove settings** also removes the Work Log association and retry state. The first reconnect from a legacy saved token validates that token to identify its user. If its identity cannot be verified, its timer is still running, or Jira-linked timer/Work Log history is retained for a different user, the extension blocks replacement instead of silently orphaning, deleting, or mixing state; **Remove settings** is the explicit destructive path.
 
-The extension does not persist the list of Toggl entries retrieved for **Worked today**, **Worked this week**, or **Today's appointments**, the calculated totals, Jira descriptions prepared for copying, or clipboard documents. Jira metadata and the prepared Markdown document are held only in transient service-worker and content-script memory; they are not persisted. Manual timer descriptions are not persisted by the extension. A rendered description may be retained in bounded Jira association state only when it belongs to a timer started from Jira or replayed from a known Jira association.
+The extension does not persist the Toggl Accounts session response, complete Track web-profile response, browser cookies, list of Toggl entries retrieved for **Worked today**, **Worked this week**, or **Today's appointments**, the calculated totals, Jira descriptions prepared for copying, or clipboard documents. Account and Jira metadata are held only in transient service-worker or content-script memory unless explicitly listed above. Manual timer descriptions are not persisted by the extension. A rendered description may be retained in bounded Jira association state only when it belongs to a timer started from Jira or replayed from a known Jira association.
 
 ## Network requests
 
 The extension sends requests only to:
 
 - The configured Jira origin, through the browser's existing authenticated Jira session.
+- `https://accounts.toggl.com`, only after the user clicks **Connect Toggl**, through the browser's existing Toggl account session.
+- `https://track.toggl.com`, only after the user clicks **Connect Toggl**, through the browser's existing Toggl Track web session.
 - `https://api.track.toggl.com`, authenticated with the user's Toggl API token.
+
+### Toggl account connection
+
+After the user grants the exact optional `https://accounts.toggl.com/*` and `https://track.toggl.com/*` permissions, the service worker sends `GET https://accounts.toggl.com/api/sessions` with browser credentials included. A successful response confirms the session with `{ "success": true }`; it does not contain the API token. The worker then sends credentialed `GET https://track.toggl.com/api/v9/me`, extracts the API token from that signed-in Track web profile, and validates it with `GET https://api.track.toggl.com/api/v9/me` before storing it. Chrome may attach Toggl's secure session cookies; the extension does not read, copy, or store those cookies itself. Neither web response nor the API token is returned to the settings page.
+
+If the Accounts session is missing, the extension opens `https://accounts.toggl.com/track/login/`. If the Track web profile is unavailable, it opens `https://track.toggl.com/timer`. In both cases it waits for the user to retry explicitly; it does not submit login credentials, poll the account, or log the user out. The session check and cookie-authenticated Track web-profile request are web-app behavior, not documented stable public integration contracts; sequencing them for extension connection is an inference from Toggl's current official bundle. An unsupported response fails without changing the saved token. Browser or enterprise third-party-cookie restrictions may prevent this flow.
 
 ### Toggl requests
 
@@ -56,13 +64,13 @@ No browsing history, Jira issue data, Toggl time entries, manually entered descr
 
 ## Permissions
 
-The extension requires Chrome's `sidePanel` permission to host its persistent controls beside the current tab. It separately requests runtime access to the exact Jira origin entered in Settings. This approved origin is used for the Jira timer and copy actions, issue metadata, side-panel Jira progress, and optional Work Log synchronization. Removing the extension settings also removes that host permission.
+The extension requires Chrome's `sidePanel` permission to host its persistent controls beside the current tab. It requests runtime access to `https://accounts.toggl.com/*` and `https://track.toggl.com/*` together when the user clicks **Connect Toggl**, and separately requests the exact Jira origin entered when settings are saved. The two Toggl grants are used only for the account-session check and signed-in Track web-profile request. The approved Jira origin is used for the Jira timer and copy actions, issue metadata, side-panel Jira progress, and optional Work Log synchronization. Removing the extension settings also asks Chrome to remove all of these runtime host grants. If Chrome cannot confirm their removal, Settings shows a warning so the user can remove the grants from the extension's site settings.
 
 The extension does not request a broad clipboard permission. Clipboard writing occurs through `navigator.clipboard.writeText()` only from the user's explicit click beside the floating Jira timer button on the configured HTTPS Jira site.
 
 ## Token protection
 
-The Toggl token is available only to trusted extension contexts through `chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" })`. The Jira content script cannot directly read it. The token is sent only to the Toggl API and is never returned in content-script messages or included in Jira requests, Work Log comments, or clipboard content.
+The worker requires `chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" })` to succeed before saving a newly connected token. The Jira content script cannot directly read it. The token is sent only to the Toggl API and is never returned in settings or content-script messages or included in Jira requests, Work Log comments, or clipboard content. This access restriction is not encryption: anyone with access to the Chrome profile and extension developer tools may still be able to inspect local extension storage.
 
 ## Purpose and limited use
 

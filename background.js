@@ -4,6 +4,13 @@ const STORAGE_KEY = "jiraTogglSettings";
 const WORKLOG_STATE_KEY = "jiraTogglWorklogState";
 const DYNAMIC_CONTENT_SCRIPT_ID = "jira-toggl-quick-start-content";
 const TOGGL_API_BASE_URL = "https://api.track.toggl.com";
+const TOGGL_ACCOUNTS_URL = "https://accounts.toggl.com/api/sessions";
+const TOGGL_ACCOUNTS_MATCH = "https://accounts.toggl.com/*";
+const TOGGL_LOGIN_URL = "https://accounts.toggl.com/track/login/";
+const TOGGL_TRACK_WEB_MATCH = "https://track.toggl.com/*";
+const TOGGL_TRACK_WEB_ME_URL = "https://track.toggl.com/api/v9/me";
+const TOGGL_TRACK_WEB_URL = "https://track.toggl.com/timer";
+const TOGGL_CONNECTION_MATCHES = [TOGGL_ACCOUNTS_MATCH, TOGGL_TRACK_WEB_MATCH];
 const CREATED_WITH = "jira-toggl-quickstart-chrome";
 const WORKLOG_PROPERTY_KEY = "jira-toggl-quickstart";
 const WORKLOG_STATE_VERSION = 1;
@@ -66,6 +73,7 @@ const WORKLOG_COMMENT_VARIABLE_SET = new Set(WORKLOG_COMMENT_VARIABLES);
 
 const DEFAULT_SETTINGS = Object.freeze({
   apiToken: "",
+  togglUserId: null,
   jiraOrigin: "",
   workspaceId: null,
   workspaceName: "",
@@ -96,9 +104,10 @@ class UserFacingError extends Error {
 
 // The API token remains available only to trusted extension pages and the
 // service worker. Jira content scripts cannot read chrome.storage.local.
-void chrome.storage.local
-  .setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" })
-  .catch(() => undefined);
+const trustedStorageReady = chrome.storage.local.setAccessLevel({
+  accessLevel: "TRUSTED_CONTEXTS"
+});
+void trustedStorageReady.catch(() => undefined);
 
 void chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
@@ -204,6 +213,10 @@ async function handleMessage(message, sender) {
     case "GET_OPTIONS_STATE":
       assertExtensionPageSender(sender);
       return getOptionsState();
+
+    case "CONNECT_TOGGL":
+      assertExtensionPageSender(sender);
+      return notifySidePanelAfter(serializeExtensionMutation(() => connectToggl()));
 
     case "GET_JIRA_UI_SETTINGS": {
       const settings = await assertJiraSender(sender);
@@ -346,13 +359,13 @@ function toPublicSettings(settings, jiraPermissionGranted = false) {
   const hasApiToken = Boolean(settings.apiToken);
   const workspaceConfigured = isPositiveInteger(settings.workspaceId);
   const projectConfigured = isPositiveInteger(settings.projectId);
-  const togglConnected = hasApiToken && workspaceConfigured;
-  const togglConfigured = togglConnected;
+  const togglConnected = hasApiToken;
+  const togglConfigured = togglConnected && workspaceConfigured;
   const jiraConfigured = Boolean(settings.jiraOrigin && jiraPermissionGranted);
 
   let configurationRequired = "";
   if (!hasApiToken) {
-    configurationRequired = "api-token";
+    configurationRequired = "toggl";
   } else if (!workspaceConfigured) {
     configurationRequired = "workspace";
   } else if (!jiraConfigured) {
@@ -402,6 +415,266 @@ async function getOptionsState() {
   };
 }
 
+async function connectToggl() {
+  if (!(await hasTogglConnectionPermissions())) {
+    throw new UserFacingError(
+      "TOGGL_ACCOUNTS_PERMISSION_REQUIRED",
+      "Grant access to Toggl Accounts and Track before connecting."
+    );
+  }
+
+  await assertTrustedStorageReady();
+  const apiToken = await getTogglSessionApiToken();
+  const me = await validateConnectedTogglProfile(apiToken);
+  const existing = await resolveExistingTogglIdentity(
+    await getSettings(),
+    apiToken,
+    me
+  );
+  const settings = buildConnectedTogglSettings(existing, apiToken, me);
+  await assertTogglAccountSwitchSafe(existing, settings);
+  await chrome.storage.local.set({ [STORAGE_KEY]: settings });
+  await syncActionIcon(settings);
+  return getOptionsState();
+}
+
+async function validateConnectedTogglProfile(apiToken) {
+  try {
+    return await togglRequest("/api/v9/me", { apiToken });
+  } catch {
+    throw new UserFacingError(
+      "TOGGL_CONNECTION_VALIDATION_FAILED",
+      "Toggl could not validate this account connection. The previous connection was not changed."
+    );
+  }
+}
+
+async function assertTrustedStorageReady() {
+  try {
+    await trustedStorageReady;
+  } catch {
+    throw new UserFacingError(
+      "PROTECTED_STORAGE_UNAVAILABLE",
+      "Chrome could not protect the saved Toggl connection. Reload the extension and try again."
+    );
+  }
+}
+
+async function getTogglSessionApiToken() {
+  const { response, payload } = await fetchTogglAccountSession();
+  await assertUsableTogglSessionResponse(response);
+  assertSuccessfulTogglSession(payload);
+  return getTogglWebApiToken();
+}
+
+async function assertUsableTogglSessionResponse(response) {
+  if (response.status === 401 || response.status === 403) {
+    const opened = await openTogglLogin();
+    throw new UserFacingError(
+      "TOGGL_LOGIN_REQUIRED",
+      opened
+        ? "Log in to Toggl in the opened tab, then click Connect Toggl again."
+        : "Open the Toggl login page, sign in, then click Connect Toggl again."
+    );
+  }
+
+  if (!response.ok) {
+    throw new UserFacingError(
+      "TOGGL_SESSION_UNAVAILABLE",
+      "Toggl Accounts could not check your session. Try again shortly."
+    );
+  }
+}
+
+function assertSuccessfulTogglSession(payload) {
+  if (unwrapPayload(payload)?.success !== true) {
+    throw new UserFacingError(
+      "TOGGL_SESSION_UNSUPPORTED",
+      "Toggl returned an unsupported account session response. The connection flow may have changed."
+    );
+  }
+}
+
+async function getTogglWebApiToken() {
+  const { response, payload } = await fetchTogglWebProfile();
+  await assertUsableTogglWebResponse(response);
+  const profile = unwrapPayload(payload);
+  const apiToken = typeof profile?.api_token === "string"
+    ? profile.api_token.trim()
+    : "";
+  if (!apiToken) {
+    throw new UserFacingError(
+      "TOGGL_TRACK_PROFILE_UNSUPPORTED",
+      "Toggl did not return a usable Track profile. The connection flow may have changed."
+    );
+  }
+
+  return apiToken;
+}
+
+async function assertUsableTogglWebResponse(response) {
+  if (response.status === 401 || response.status === 403) {
+    const opened = await openTogglPage(TOGGL_TRACK_WEB_URL);
+    throw new UserFacingError(
+      "TOGGL_TRACK_SESSION_REQUIRED",
+      opened
+        ? "Finish opening Toggl Track in the new tab, then retry the connection."
+        : "Open Toggl Track in this Chrome profile, then retry the connection."
+    );
+  }
+
+  if (!response.ok) {
+    throw new UserFacingError(
+      "TOGGL_TRACK_SESSION_UNAVAILABLE",
+      "Toggl Track could not load your signed-in profile. Try again shortly."
+    );
+  }
+}
+
+async function fetchTogglAccountSession() {
+  try {
+    const response = await fetch(TOGGL_ACCOUNTS_URL, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      redirect: "error",
+      headers: { Accept: "application/json" }
+    });
+    const payload = parseResponseBody(await response.text());
+    return { response, payload };
+  } catch {
+    throw new UserFacingError(
+      "TOGGL_SESSION_UNAVAILABLE",
+      "Could not connect to Toggl Accounts. Check your connection and browser cookie settings."
+    );
+  }
+}
+
+async function fetchTogglWebProfile() {
+  try {
+    const response = await fetch(TOGGL_TRACK_WEB_ME_URL, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      redirect: "error",
+      headers: { Accept: "application/json" }
+    });
+    const payload = parseResponseBody(await response.text());
+    return { response, payload };
+  } catch {
+    throw new UserFacingError(
+      "TOGGL_TRACK_SESSION_UNAVAILABLE",
+      "Could not connect to Toggl Track. Check your connection and browser cookie settings."
+    );
+  }
+}
+
+async function openTogglLogin() {
+  return openTogglPage(TOGGL_LOGIN_URL);
+}
+
+async function openTogglPage(url) {
+  try {
+    await chrome.tabs.create({ url });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function buildConnectedTogglSettings(existing, apiToken, me) {
+  const togglUserId = getValidatedTogglUserId(me);
+  const defaultWorkspaceId = normalizeOptionalPositiveInteger(
+    me?.default_workspace_id,
+    "Default workspace ID"
+  );
+  const sameUser = Number(existing.togglUserId) === togglUserId;
+  const workspaceId = sameUser && isPositiveInteger(existing.workspaceId)
+    ? Number(existing.workspaceId)
+    : defaultWorkspaceId;
+  return {
+    ...existing,
+    apiToken,
+    togglUserId,
+    workspaceId,
+    workspaceName: sameUser ? existing.workspaceName : "",
+    profileName: String(me?.fullname || me?.email || ""),
+    projectId: sameUser ? existing.projectId : null,
+    projectName: sameUser ? existing.projectName : ""
+  };
+}
+
+async function resolveExistingTogglIdentity(existing, apiToken, me) {
+  if (!existing.apiToken || isPositiveInteger(existing.togglUserId)) {
+    return existing;
+  }
+
+  if (existing.apiToken === apiToken) {
+    return { ...existing, togglUserId: getValidatedTogglUserId(me) };
+  }
+
+  try {
+    const oldMe = await togglRequest("/api/v9/me", { apiToken: existing.apiToken });
+    return { ...existing, togglUserId: getValidatedTogglUserId(oldMe) };
+  } catch {
+    throw new UserFacingError(
+      "TOGGL_ACCOUNT_SWITCH_UNVERIFIED",
+      "The previous Toggl account could not be verified. Remove settings before connecting a different user."
+    );
+  }
+}
+
+function getValidatedTogglUserId(me) {
+  const togglUserId = Number(me?.id);
+  if (!isPositiveInteger(togglUserId)) {
+    throw new UserFacingError(
+      "TOGGL_PROFILE_INVALID",
+      "Toggl did not return a valid account profile. The connection was not saved."
+    );
+  }
+  return togglUserId;
+}
+
+async function assertTogglAccountSwitchSafe(existing, settings) {
+  const switchedUser = isPositiveInteger(existing.togglUserId) &&
+    Number(existing.togglUserId) !== settings.togglUserId;
+  if (!switchedUser) {
+    return;
+  }
+
+  await assertNoRunningTimerForAccountSwitch(existing.apiToken);
+  await assertNoRetainedWorklogState();
+}
+
+async function assertNoRetainedWorklogState() {
+  const worklogs = await getWorklogState();
+  if (Object.keys(worklogs.entries).length > 0) {
+    throw new UserFacingError(
+      "TOGGL_ACCOUNT_SWITCH_REQUIRES_CLEAR",
+      "Remove settings before connecting a different Toggl user because Jira-linked timer or Work Log history is still saved."
+    );
+  }
+}
+
+async function assertNoRunningTimerForAccountSwitch(apiToken) {
+  let current;
+  try {
+    current = await getCurrentTimeEntry(apiToken);
+  } catch {
+    throw new UserFacingError(
+      "TOGGL_ACCOUNT_SWITCH_UNVERIFIED",
+      "The extension could not verify whether the previous Toggl account has a running timer. Stop it or remove settings before switching accounts."
+    );
+  }
+
+  if (current) {
+    throw new UserFacingError(
+      "TOGGL_ACCOUNT_SWITCH_TIMER_RUNNING",
+      "Stop the running timer in the previous Toggl account before connecting a different user."
+    );
+  }
+}
+
 async function getJiraUiSettings(settingsInput = null) {
   const settings = settingsInput || await getSettings();
   return {
@@ -413,10 +686,10 @@ async function validateAndSaveSettings(input) {
   const existing = await getSettings();
   const candidate = input && typeof input === "object" ? input : {};
   const jiraOrigin = normalizeJiraOrigin(candidate.jiraOrigin);
-  const apiToken = String(candidate.apiToken || "").trim() || existing.apiToken;
+  const apiToken = existing.apiToken;
 
   if (!apiToken) {
-    throw new UserFacingError("MISSING_API_TOKEN", "Enter your Toggl Track API token.");
+    throw new UserFacingError("MISSING_API_TOKEN", "Connect Toggl before saving settings.");
   }
 
   if (!(await hasJiraHostPermission(jiraOrigin))) {
@@ -484,6 +757,7 @@ async function validateAndSaveSettings(input) {
 
   const settings = {
     apiToken,
+    togglUserId: existing.togglUserId,
     jiraOrigin,
     workspaceId,
     workspaceName: String(workspace?.name || ""),
@@ -598,11 +872,18 @@ async function clearSettings() {
   await chrome.storage.local.remove([STORAGE_KEY, WORKLOG_STATE_KEY]);
   await setActionIcon(false);
 
-  if (existing.jiraOrigin) {
-    await removeJiraHostPermission(existing.jiraOrigin);
-  }
+  const jiraAccessRemoved = existing.jiraOrigin
+    ? await removeJiraHostPermission(existing.jiraOrigin)
+    : true;
+  const togglAccessRemoved = await removeTogglConnectionPermissions();
+  const siteAccessRemoved = jiraAccessRemoved && togglAccessRemoved;
 
-  return { cleared: true };
+  return {
+    cleared: true,
+    permissionCleanupWarning: siteAccessRemoved
+      ? ""
+      : "Settings were removed, but Chrome could not remove site access. Remove it from the extension's site settings."
+  };
 }
 
 async function getPopupState() {
@@ -2730,15 +3011,43 @@ async function hasJiraHostPermission(jiraOrigin) {
 
 async function removeJiraHostPermission(jiraOrigin) {
   if (!jiraOrigin) {
-    return false;
+    return true;
   }
 
   try {
-    return await chrome.permissions.remove({
-      origins: [toJiraMatchPattern(jiraOrigin)]
-    });
+    const origins = [toJiraMatchPattern(jiraOrigin)];
+    await chrome.permissions.remove({ origins });
+    return !(await chrome.permissions.contains({ origins }));
   } catch {
     return false;
+  }
+}
+
+async function hasTogglConnectionPermissions() {
+  try {
+    return await chrome.permissions.contains({ origins: TOGGL_CONNECTION_MATCHES });
+  } catch {
+    return false;
+  }
+}
+
+async function removeTogglConnectionPermissions() {
+  try {
+    await chrome.permissions.remove({ origins: TOGGL_CONNECTION_MATCHES });
+    return !(await hasAnyTogglConnectionPermission());
+  } catch {
+    return false;
+  }
+}
+
+async function hasAnyTogglConnectionPermission() {
+  try {
+    for (const origin of TOGGL_CONNECTION_MATCHES) {
+      if (await chrome.permissions.contains({ origins: [origin] })) return true;
+    }
+    return false;
+  } catch {
+    return true;
   }
 }
 

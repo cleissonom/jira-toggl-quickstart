@@ -138,6 +138,31 @@ form {
 
 .project-field { grid-column: 1 / -1; }
 
+.toggl-account-control {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 6px 6px 12px;
+  border: 1px solid #b7b9c0;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.toggl-account-control > span {
+  min-width: 0;
+  overflow: hidden;
+  color: #44546f;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toggl-account-control > span.connected { color: #216e4e; }
+.toggl-account-control button { flex: 0 0 auto; }
+
 .required-indicator {
   color: #ae2a19;
   font-size: 14px;

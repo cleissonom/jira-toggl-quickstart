@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Jira → Toggl Quick Start",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Start and replay Toggl work from Jira with today's entries, flexible controls, and optional Work Log sync.",
   "minimum_chrome_version": "114",
   "permissions": [

@@ -55,13 +55,19 @@ After changing source files, click **Reload** on the extension card and reload a
 
 The main settings form keeps the common choices visible:
 
-1. **Jira site URL** — paste any URL from the Jira site. The extension normalizes it to its HTTPS origin.
-2. **Toggl Track API token** — use the direct **Open the Toggl API Token page** link below the field.
+1. **Connect Toggl** — use the Toggl account already signed in to Chrome; no token needs to be copied or pasted.
+2. **Jira site URL** — paste any URL from the Jira site. The extension normalizes it to its HTTPS origin.
 3. **Toggl project ID** — optional. Leave it blank to select the active project in the workspace with the highest `actual_hours`.
 4. **Billable time entries** — choose whether timers created by the extension should be billable by default.
 5. **Jira Work Logs** — optionally create a Work Log when a timer started from the Jira button stops.
 
-Click **Connect and save**. The extension requests access only to the exact Jira origin entered, validates the Toggl token, detects or checks the selected workspace, reads related Toggl project data, and registers its Jira content script. An entered project ID is validated against the workspace. When the field is blank, the extension selects the active project in that workspace with the highest `actual_hours`; if none exists, timers remain usable without a project.
+Clicking **Connect Toggl** requests optional access to `https://accounts.toggl.com/*` and `https://track.toggl.com/*`. It confirms the existing Accounts session, loads the signed-in Track web profile to obtain its API token, validates that token through `https://api.track.toggl.com/api/v9/me`, and stores it in protected extension storage. If either web session is unavailable, the extension opens the corresponding fixed Toggl page; finish signing in or opening Track, return to Settings, and click **Retry connection**. The extension never reads account cookies or the user's password.
+
+Then click **Save settings**. The extension requests access only to the exact Jira origin entered, detects or checks the selected workspace, reads related Toggl project data, and registers its Jira content script. An entered project ID is validated against the workspace. When the field is blank, the extension selects the active project in that workspace with the highest `actual_hours`; if none exists, timers remain usable without a project.
+
+The credentialed `GET /api/sessions` check and cookie-authenticated `GET https://track.toggl.com/api/v9/me` are Toggl web-app behavior, not documented public integration contracts. The current official bundle defines the session check and loads the current user from the Track web origin; sequencing them for extension connection is an inference. The connection fails safely without replacing saved credentials if Toggl changes either response. Browser or enterprise settings that block third-party cookies may also prevent this flow.
+
+On the first reconnect after upgrading from token entry, the worker validates the previous saved token to bind existing settings to the same Toggl user. Switching to a different user is blocked while the old account has a running timer or retained Jira-linked timer/Work Log history. Stop the old timer first; use **Remove settings** only when intentionally discarding retained extension state.
 
 The collapsed **Advanced settings** section contains:
 
@@ -202,19 +208,19 @@ The content script tries Jira REST API versions `3`, `2`, and `latest`, then fal
 - `sidePanel` — hosts the persistent extension controls beside the current browser tab and lets the toolbar icon toggle them.
 - `https://api.track.toggl.com/*` — calls the Toggl Track API.
 
-### Optional Jira host permission
+### Optional HTTPS host permissions
 
-The manifest allows the settings page to request an HTTPS host at runtime. Chrome displays the exact Jira site being requested. The extension stores only the configured origin and registers its content script only for that origin. The same approved origin is used to read issue fields for timer descriptions, side-panel progress, the adjacent Jira copy action, and, when enabled, Jira Work Logs.
+The manifest allows the settings page to request an HTTPS host at runtime. Chrome displays the exact origins being requested. **Connect Toggl** requests only `https://accounts.toggl.com/*` for the session check and `https://track.toggl.com/*` for the signed-in Track profile. Saving settings separately requests only the configured Jira origin. The extension stores only the configured Jira origin and registers its content script only there. That Jira grant is used to read issue fields for timer descriptions, side-panel progress, the adjacent Jira copy action, and, when enabled, Jira Work Logs.
 
 ### Token handling
 
-The Toggl API token is stored in `chrome.storage.local`. The service worker calls:
+The service worker obtains the Toggl API token only after a successful account-session check and signed-in Track web-profile request, validates it against the public Track API, then stores it in `chrome.storage.local`. It calls:
 
 ```javascript
 chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
 ```
 
-This prevents the Jira content script from directly reading extension storage. The token is never returned to the Jira page and is never sent to Jira.
+This prevents the Jira content script from directly reading extension storage. The Accounts-session response, Track web-profile response, and token are never returned to the settings page or Jira page, and the token is never sent to Jira. Chrome profile access and extension developer tools can still inspect local extension storage; this protection is access isolation, not encryption.
 
 See [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md) for more details.
 
@@ -253,7 +259,11 @@ LICENSE             MIT license
   - `GET /rest/api/{version}/issue/{issueKey}/worklog`
   - `POST /rest/api/{version}/issue/{issueKey}/worklog`
   - Jira Work Log properties for Toggl-entry duplicate detection
+- Toggl web-app connection:
+  - `GET https://accounts.toggl.com/api/sessions` to confirm the existing account session
+  - `GET https://track.toggl.com/api/v9/me` to load the signed-in Track profile and its API token
 - Toggl Track API v9:
+  - `GET https://api.track.toggl.com/api/v9/me` to validate the retrieved token and bind local state to the Toggl user
   - `GET /api/v9/me?with_related_data=true`
   - `GET /api/v9/workspaces/{workspace_id}`
   - `GET /api/v9/workspaces/{workspace_id}/projects/{project_id}`
@@ -268,6 +278,8 @@ Official references:
 - https://developer.chrome.com/docs/extensions/reference/api/permissions
 - https://developer.chrome.com/docs/extensions/reference/api/scripting
 - https://developer.chrome.com/docs/extensions/reference/api/sidePanel
+- https://developer.chrome.com/docs/extensions/develop/concepts/network-requests
+- https://developer.chrome.com/docs/extensions/develop/concepts/storage-and-cookies
 - https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/
 - https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-worklogs/
 - https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-worklog-properties/
@@ -279,13 +291,13 @@ Official references:
 - Chrome 114 or newer.
 - Jira sites served over HTTPS.
 - Jira Cloud is the primary target. Jira deployments exposing compatible REST v2 or `latest` issue and Work Log endpoints may also work.
-- Toggl Track API tokens.
+- A Toggl Track account signed in through Chrome. The account-session connection may be unavailable when third-party cookies are blocked or if Toggl changes its undocumented response.
 
 ## Publishing and releases
 
 - [RELEASING.md](RELEASING.md) describes versioning, tags, and automated GitHub releases.
 - [STORE_LISTING.md](STORE_LISTING.md) contains the Chrome Web Store description, permission justifications, and privacy declarations.
-- A tag such as `v0.7.0` triggers the release workflow, which validates the source, creates a minimal Chrome Web Store ZIP plus its SHA-256 checksum, and prepends the matching changelog section to the generated comparison notes.
+- A tag such as `v0.7.1` triggers the release workflow, which validates the source, creates a minimal Chrome Web Store ZIP plus its SHA-256 checksum, and prepends the matching changelog section to the generated comparison notes.
 
 ## Contributing
 

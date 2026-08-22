@@ -84,10 +84,24 @@ function readPixel(image, x, y) {
   return [...image.pixels.subarray(offset, offset + 4)];
 }
 
-test("settings page includes the direct Toggl API token link", () => {
+test("settings page connects Toggl without exposing an API token input", () => {
   const html = read("options.html");
-  assert.match(html, /https:\/\/track\.toggl\.com\/profile#api-token/);
-  assert.match(html, /Open the Toggl API Token page/);
+  const script = read("options.js");
+
+  assert.doesNotMatch(html, /id="api-token"|profile#api-token/i);
+  assert.match(html, /id="connect-toggl"/);
+  assert.match(html, />Connect Toggl</);
+  assert.match(script, /https:\/\/accounts\.toggl\.com\/\*/);
+  assert.match(script, /https:\/\/track\.toggl\.com\/\*/);
+  assert.match(script, /chrome\.permissions\.request\(/);
+  assert.match(script, /type: "CONNECT_TOGGL"/);
+  assert.doesNotMatch(script, /apiTokenInput|apiToken:/);
+  const connectHelp = html.match(
+    /<small id="toggl-connect-help">([\s\S]*?)<\/small>/
+  )?.[1] || "";
+  assert.match(connectHelp, /API token/i);
+  assert.match(connectHelp, /protected.*Chrome profile/i);
+  assert.match(connectHelp, /never reads.*password.*cookie/is);
 });
 
 test("settings page exposes every supported template variable as an insert button", () => {
@@ -149,7 +163,7 @@ test("extension pages and primary actions are presented in English", () => {
 
   assert.match(optionsHtml, /<html lang="en">/);
   assert.match(sidePanelHtml, /<html lang="en">/);
-  assert.match(optionsHtml, />Connect and save</);
+  assert.match(optionsHtml, />Save settings</);
   assert.match(sidePanelHtml, />Start timer</);
   assert.match(contentScript, /Start in Toggl/);
   assert.match(contentScript, /Stop in Toggl/);
@@ -298,14 +312,14 @@ test("running icon uses the high-contrast 0.6.0 palette", () => {
   assert.deepEqual(readPixel(image, 84, 68), [26, 244, 252, 255]);
 });
 
-test("release metadata is set to version 0.7.0", () => {
+test("release metadata is set to version 0.7.1", () => {
   const manifest = JSON.parse(read("manifest.json"));
   const packageJson = JSON.parse(read("package.json"));
-  assert.equal(manifest.version, "0.7.0");
-  assert.equal(packageJson.version, "0.7.0");
+  assert.equal(manifest.version, "0.7.1");
+  assert.equal(packageJson.version, "0.7.1");
   assert.match(manifest.description, /today/i);
-  assert.match(read("CHANGELOG.md"), /## 0\.7\.0 — 2026-08-22/);
-  assert.match(read(".github/ISSUE_TEMPLATE/bug_report.yml"), /placeholder: 0\.7\.0/);
+  assert.match(read("CHANGELOG.md"), /## 0\.7\.1 — 2026-08-22/);
+  assert.match(read(".github/ISSUE_TEMPLATE/bug_report.yml"), /placeholder: 0\.7\.1/);
 });
 
 test("extension stylesheets have balanced blocks and one Work Log settings block", () => {
@@ -456,13 +470,14 @@ test("Jira pages prioritize stopping the current issue without requiring a proje
   assert.doesNotMatch(script, /valid Toggl project ID is required/i);
 });
 
-test("release documentation describes the v0.7.0 side panel and Jira controls", () => {
+test("release documentation covers the v0.7.0 side panel and v0.7.1 Toggl connection", () => {
   const readme = read("README.md");
   const privacy = read("PRIVACY.md");
   const security = read("SECURITY.md");
   const store = read("STORE_LISTING.md");
   const changelog = read("CHANGELOG.md");
   const releasing = read("RELEASING.md");
+  const options = read("options.html");
 
   assert.match(changelog, /## 0\.7\.0 — 2026-08-22/);
   assert.match(changelog, /side panel/i);
@@ -486,9 +501,18 @@ test("release documentation describes the v0.7.0 side panel and Jira controls", 
   assert.match(security, /no remote JavaScript, `eval`, `new Function`/);
   assert.match(store, /No clipboard permission is requested/);
   assert.match(store, /side panel/i);
-  assert.match(releasing, /v0\.7\.0/);
+  assert.match(releasing, /v0\.7\.1/);
   assert.match(releasing, /all four floating-button positions/i);
   assert.match(releasing, /changelog.*generated comparison notes/i);
+  assert.match(changelog, /## 0\.7\.1.*Connect Toggl/is);
+  assert.doesNotMatch(`${changelog}\n${readme}\n${options}`, /\bexperimental\b/i);
+  assert.match(readme, /GET \/api\/sessions.*not documented public integration contracts/is);
+  assert.match(privacy, /https:\/\/accounts\.toggl\.com\/\*/);
+  assert.match(privacy, /https:\/\/track\.toggl\.com\/\*/);
+  assert.match(privacy, /does not read, copy, or store those cookies/i);
+  assert.match(security, /Settings messages cannot provide or replace the token/i);
+  assert.match(store, /Connect Toggl.*accounts\.toggl\.com.*track\.toggl\.com/is);
+  assert.match(releasing, /Retry connection/);
 });
 
 test("documentation consistently describes the optional automatic Toggl project", () => {

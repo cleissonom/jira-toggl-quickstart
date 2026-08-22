@@ -24,7 +24,7 @@
         <div class="section-heading">
           <div>
             <h2 id="setup-title">Quick setup</h2>
-            <p>Paste your Jira URL and Toggl token, optionally choose a Toggl project, then save.</p>
+            <p>Connect your signed-in Toggl account, add your Jira URL, then save.</p>
           </div>
           <span id="connection-badge" class="badge">Not configured</span>
         </div>
@@ -47,25 +47,24 @@
               <small>Paste the site, board, backlog, or issue URL. Only its HTTPS origin is saved.</small>
             </label>
 
-            <label class="field">
-              <span>Toggl Track API token</span>
-              <input
-                id="api-token"
-                name="apiToken"
-                type="password"
-                autocomplete="off"
-                spellcheck="false"
-                placeholder="Paste your Toggl API token"
-              />
-              <small>
-                Need a token?
-                <a
-                  href="https://track.toggl.com/profile#api-token"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >Open the Toggl API Token page ↗</a>
+            <div class="field toggl-account-field">
+              <span>Toggl Track account</span>
+              <div class="toggl-account-control">
+                <span id="toggl-account-state">Not connected</span>
+                <button
+                  id="connect-toggl"
+                  class="secondary"
+                  type="button"
+                  aria-describedby="toggl-account-state toggl-connect-help"
+                >Connect Toggl</button>
+              </div>
+              <small id="toggl-connect-help">
+                Uses your current Toggl Accounts and Track sign-ins to confirm the session, retrieve
+                and validate an API token, then saves it in protected storage in this Chrome profile.
+                The extension never reads your password or account cookies. This connection
+                depends on Toggl's web-app session endpoints.
               </small>
-            </label>
+            </div>
 
             <label class="field project-field">
               <span>Toggl project ID <em>(optional)</em></span>
@@ -244,7 +243,10 @@
             <p>
               The extension reads Toggl entries for the current browser-local day and week to
               calculate daily, weekly, and per-appointment totals, and can automatically choose
-              your most-used active project.
+              your most-used active project. When you connect Toggl, it checks your existing
+              Toggl Accounts session, loads your signed-in Track web profile, validates its API
+              token, and saves only the token and account details needed by the extension. It never
+              reads your Toggl password or stores the account cookies.
               It stores your floating button position. It reads the Jira issue summary, description, logged time, and
               estimates for the timer, side-panel progress, and adjacent copy action. Jira content is
               copied only after you click the copy button. If Work Log sync is enabled, the stopped duration, start time,
@@ -257,7 +259,7 @@
           <div id="status" class="status" role="status" aria-live="polite"></div>
 
           <div class="actions">
-            <button id="save-button" class="primary" type="submit">Connect and save</button>
+            <button id="save-button" class="primary" type="submit">Save settings</button>
             <button id="clear-button" class="secondary" type="button">Remove settings</button>
           </div>
         </form>
@@ -277,8 +279,9 @@
         <h2 id="privacy-title">Focused permissions</h2>
         <p>
           The required side-panel permission hosts these controls beside the current tab. Chrome asks
-          for site access only to the Jira origin entered above. The Toggl token stays in this Chrome
-          profile and is used only by the extension service worker.
+          for site access only to the Jira origin entered above and to Toggl Accounts and Track when
+          you click Connect Toggl. The Toggl token stays in this Chrome profile and is available only
+          to trusted extension pages and the service worker.
         </p>
       </section>
     </main>

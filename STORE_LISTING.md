@@ -20,7 +20,7 @@ Optional Jira Work Log synchronization can create a Work Log when a Jira-linked 
 
 The extension also provides a manual timer field in the side panel, supports billable and non-billable defaults, and can stop the current timer automatically when switching work. Manual timers remain Toggl-only and are not matched to Jira issues for Work Log creation.
 
-Setup is intentionally small: enter a Jira site URL, paste a Toggl API token, optionally enter a Toggl project ID, choose the defaults, and save. Advanced settings include the four floating-control positions. A blank project field is populated automatically when an eligible related project exists. Jira access is requested at runtime for the exact HTTPS origin entered by the user.
+Setup is intentionally small: click **Connect Toggl** to use the account already signed in to Chrome, enter a Jira site URL, optionally enter a Toggl project ID, choose the defaults, and save. Advanced settings include the four floating-control positions. A blank project field is populated automatically when an eligible related project exists. Toggl Accounts and Track access are requested together for their exact origins; Jira access is requested separately for its exact origin.
 
 This is an independent open-source project and is not affiliated with, endorsed by, or sponsored by Atlassian or Toggl.
 
@@ -34,7 +34,7 @@ Track and replay Jira and related manual work in Toggl, present local Toggl/Jira
 - `scripting`: dynamically registers the Jira content script only for the origin approved by the user.
 - `sidePanel`: hosts the persistent extension controls beside the current tab and allows the toolbar icon to toggle them. The extension requires Chrome 114 or newer.
 - `https://api.track.toggl.com/*`: validates the Toggl account and workspace; reads related projects for optional automatic selection; reads current and week-boundary time entries; validates a selected replay source; and creates or stops time entries.
-- Optional `https://*/*`: allows the user to approve one exact HTTPS Jira origin at runtime, including Jira Cloud, custom Jira domains, and compatible self-hosted deployments. The approved origin is used to read issue information, render the Jira timer/copy actions, show Jira progress, prepare user-requested Markdown copy, and optionally create Work Logs. The extension does not receive access to unrelated origins unless the user explicitly configures and approves a different Jira site.
+- Optional `https://*/*`: allows the user to approve exact HTTPS origins at runtime. **Connect Toggl** requests only `https://accounts.toggl.com/*` to confirm the existing Accounts session and `https://track.toggl.com/*` to load the signed-in Track profile. Saving settings separately requests one exact Jira origin, including Jira Cloud, custom Jira domains, and compatible self-hosted deployments. The Jira grant is used to read issue information, render the Jira timer/copy actions, show Jira progress, prepare user-requested Markdown copy, and optionally create Work Logs. No unrelated origin is accessed unless the user explicitly configures and approves it.
 
 No clipboard permission is requested. The configured HTTPS Jira page writes to the clipboard only when the user clicks **Copy Jira title & description** beside the floating timer button.
 
@@ -42,11 +42,11 @@ No clipboard permission is requested. The configured HTTPS Jira page writes to t
 
 The extension handles the following data only to provide its stated functionality:
 
-- Authentication information: a Toggl API token, stored locally and sent only to the Toggl API over HTTPS.
+- Authentication information: existing Toggl Accounts and Track web sessions used once per connection attempt, plus a Toggl API token stored locally and sent only to the Toggl API over HTTPS. The extension never reads or stores the session cookies, and neither web response nor the token is returned to the settings page.
 - Personally identifiable information: the Toggl profile response may contain the user's display name or email and is used only to confirm the connected account in Settings.
 - Website content: selected Jira issue fields, including summary, description, and time-tracking values; existing Work Log properties used for duplicate prevention; and the Work Log response from the configured Jira site.
 - User-generated content: the rendered Jira timer description, a manually typed Toggl timer description, Jira content copied after an explicit click, and the optional Work Log comment configured by the user.
-- Account and workspace metadata: Toggl profile, workspace, optional project metadata including active status and `actual_hours`, current timer, selected replay source, and week-boundary time-entry information used to configure, operate, and display the integration.
+- Account and workspace metadata: the Toggl user identifier used to keep account-bound state separated, profile, workspace, optional project metadata including active status and `actual_hours`, current timer, selected replay source, and week-boundary time-entry information used to configure, operate, and display the integration.
 
 The service worker calculates daily, weekly, per-appointment, and Jira progress values locally. Raw time-entry lists are not stored or exposed to unrelated pages; the trusted side panel receives only minimal grouped row data. Jira issue content is copied only after the user explicitly clicks the adjacent copy button. When Work Log synchronization is enabled, the extension sends the issue key, timer start time, duration, optional comment, and Toggl identifiers to the configured Jira site.
 
@@ -57,19 +57,22 @@ Use the public `PRIVACY.md` URL in the Developer Dashboard after the repository 
 ## Reviewer test instructions
 
 1. Use a Jira site where the reviewer is signed in and has **Browse projects** permission; **Work on issues** is also required to test Work Log creation.
-2. Open Settings, enter the Jira site URL and a Toggl Track API token. Leave Project ID blank to test automatic selection, or enter a valid project ID from the selected/default workspace, then click **Connect and save**.
-3. Click the toolbar icon and confirm it opens the extension side panel rather than a popup. Confirm **Worked today**, **Worked this week**, and **Today's appointments** use the browser-local day.
-4. Use **Play** on a previous row and confirm any current timer stops before the selected description starts with the saved workspace, optional project, and Billable default.
-5. Open a Jira issue and click **Start in Toggl**. Confirm the entry uses the selected project, or has no project when the workspace has no eligible active project.
-6. Refocus the side panel and confirm the order is title, totals, current timer, Jira progress, today's appointments, Stop timer, conditional pending Work Logs, then Settings. Resize it narrow and wide and confirm one vertical scroll surface, no horizontal overflow, and reachable Settings.
-7. Beside the floating Jira timer button, click **Copy Jira title & description** and confirm the clipboard contains the issue key, summary, and Markdown description.
-8. Choose each of the top-left, top-right, bottom-left, and bottom-right settings and confirm the Jira action group moves to that corner after refocusing or reloading Jira.
-9. Stop the timer from the Jira button or extension side panel.
-10. With Work Log sync enabled, confirm that stopping or switching a Jira-linked timer creates a Work Log automatically or queues it for confirmation, depending on the selected mode.
-11. Replay a known Jira appointment and confirm its later stop follows the same Work Log behavior.
-12. Test a manual appointment, including one whose text resembles a Jira key, and confirm it remains unrelated to Jira Work Log creation.
+2. Sign in at `https://accounts.toggl.com/track/login/`, open `https://track.toggl.com/timer`, then open Settings and click **Connect Toggl**. Approve access to Toggl Accounts and Track and confirm the connected-account label appears. To test recovery, sign out or clear either web session first; the extension should open the corresponding fixed Toggl page and succeed only after the session is ready and **Retry connection** is clicked.
+3. Enter the Jira site URL. Leave Project ID blank to test automatic selection, or enter a valid project ID from the selected/default workspace, then click **Save settings**.
+4. Click the toolbar icon and confirm it opens the extension side panel rather than a popup. Confirm **Worked today**, **Worked this week**, and **Today's appointments** use the browser-local day.
+5. Use **Play** on a previous row and confirm any current timer stops before the selected description starts with the saved workspace, optional project, and Billable default.
+6. Open a Jira issue and click **Start in Toggl**. Confirm the entry uses the selected project, or has no project when the workspace has no eligible active project.
+7. Refocus the side panel and confirm the order is title, totals, current timer, Jira progress, today's appointments, Stop timer, conditional pending Work Logs, then Settings. Resize it narrow and wide and confirm one vertical scroll surface, no horizontal overflow, and reachable Settings.
+8. Beside the floating Jira timer button, click **Copy Jira title & description** and confirm the clipboard contains the issue key, summary, and Markdown description.
+9. Choose each of the top-left, top-right, bottom-left, and bottom-right settings and confirm the Jira action group moves to that corner after refocusing or reloading Jira.
+10. Stop the timer from the Jira button or extension side panel.
+11. With Work Log sync enabled, confirm that stopping or switching a Jira-linked timer creates a Work Log automatically or queues it for confirmation, depending on the selected mode.
+12. Replay a known Jira appointment and confirm its later stop follows the same Work Log behavior.
+13. Test a manual appointment, including one whose text resembles a Jira key, and confirm it remains unrelated to Jira Work Log creation.
 
 The extension does not require credentials supplied by the developer; reviewers use their own Jira and Toggl accounts.
+
+The credentialed `GET /api/sessions` check and cookie-authenticated `GET https://track.toggl.com/api/v9/me` are Toggl web-app behavior, not documented stable public integration contracts. Their use as a connection sequence is an inference from Toggl's current official bundle. An unsupported response or failed public-API validation leaves any previously saved token unchanged.
 
 ## Listing assets
 

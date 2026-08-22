@@ -16,6 +16,11 @@ const WORKLOG_STATE_KEY = "jiraTogglWorklogState";
 const EXTENSION_ID = "abcdefghijklmnopabcdefghijklmnop";
 const JIRA_ORIGIN = "https://team-example.atlassian.net";
 const JIRA_MATCH = `${JIRA_ORIGIN}/*`;
+const TOGGL_ACCOUNTS_MATCH = "https://accounts.toggl.com/*";
+const TOGGL_TRACK_WEB_MATCH = "https://track.toggl.com/*";
+const TOGGL_CONNECTION_MATCHES = [TOGGL_ACCOUNTS_MATCH, TOGGL_TRACK_WEB_MATCH];
+const TOGGL_LOGIN_URL = "https://accounts.toggl.com/track/login/";
+const TOGGL_TRACK_WEB_URL = "https://track.toggl.com/timer";
 const ISSUE = {
   key: "PROJ-123",
   summary: "Improve the onboarding workflow",
@@ -43,7 +48,11 @@ function jsonResponse(payload, status = 200) {
 function createHarness({
   initialSettings = null,
   initialWorklogState = null,
-  permissions = []
+  permissions = [],
+  storageAccessError = null,
+  tabCreateError = null,
+  permissionRemoveError = null,
+  permissionRemoveErrorOrigins = []
 } = {}) {
   const storage = {};
   if (initialSettings) {
@@ -59,6 +68,7 @@ function createHarness({
   const actionIconUpdates = [];
   const sidePanelBehaviors = [];
   const runtimeMessages = [];
+  const createdTabs = [];
   const listeners = {};
   let optionsOpenCount = 0;
   let accessLevel = null;
@@ -78,6 +88,7 @@ function createHarness({
       local: {
         async setAccessLevel(value) {
           accessLevel = structuredClone(value);
+          if (storageAccessError) throw storageAccessError;
         },
         async get(key) {
           if (typeof key === "string") {
@@ -121,6 +132,12 @@ function createHarness({
         optionsOpenCount += 1;
       }
     },
+    tabs: {
+      async create(properties) {
+        createdTabs.push(structuredClone(properties));
+        if (tabCreateError) throw tabCreateError;
+      }
+    },
     permissions: {
       onAdded: {
         addListener(listener) {
@@ -136,6 +153,13 @@ function createHarness({
         return origins.every((origin) => permissionOrigins.has(origin));
       },
       async remove({ origins = [] }) {
+        if (
+          permissionRemoveError &&
+          (!permissionRemoveErrorOrigins.length ||
+            origins.some((origin) => permissionRemoveErrorOrigins.includes(origin)))
+        ) {
+          throw permissionRemoveError;
+        }
         let removed = false;
         for (const origin of origins) {
           removed = permissionOrigins.delete(origin) || removed;
@@ -183,7 +207,8 @@ function createHarness({
       headers: { ...(options.headers || {}) },
       body: options.body || null,
       credentials: options.credentials || null,
-      cache: options.cache || null
+      cache: options.cache || null,
+      redirect: options.redirect || null
     });
 
     if (fetchQueue.length === 0) {
@@ -217,6 +242,7 @@ function createHarness({
     actionIconUpdates,
     sidePanelBehaviors,
     runtimeMessages,
+    createdTabs,
     listeners,
     get optionsOpenCount() {
       return optionsOpenCount;
@@ -253,6 +279,7 @@ test("configures the toolbar action to toggle the side panel", async () => {
 function configuredSettings(overrides = {}) {
   return {
     apiToken: "test-token",
+    togglUserId: 99,
     jiraOrigin: JIRA_ORIGIN,
     workspaceId: 123,
     workspaceName: "Workspace QA",
@@ -271,8 +298,674 @@ function configuredSettings(overrides = {}) {
   };
 }
 
+test("connects Toggl from its account session without exposing the token", async () => {
+  const initialSettings = configuredSettings({
+    apiToken: "old-token",
+    billable: true,
+    descriptionTemplate: "{key}: {summary}"
+  });
+  const harness = createHarness({
+    initialSettings,
+    permissions: [JIRA_MATCH, ...TOGGL_CONNECTION_MATCHES]
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "session-token" }),
+    jsonResponse({ id: 99, default_workspace_id: 123, fullname: "Session User" }),
+    jsonResponse(null)
+  );
+
+  const result = await harness.context.handleMessage(
+    { type: "CONNECT_TOGGL" },
+    harness.extensionSender("options.html")
+  );
+
+  assert.deepEqual(harness.requests[0], {
+    url: "https://accounts.toggl.com/api/sessions",
+    method: "GET",
+    headers: { Accept: "application/json" },
+    body: null,
+    credentials: "include",
+    cache: "no-store",
+    redirect: "error"
+  });
+  assert.deepEqual(harness.requests[1], {
+    url: "https://track.toggl.com/api/v9/me",
+    method: "GET",
+    headers: { Accept: "application/json" },
+    body: null,
+    credentials: "include",
+    cache: "no-store",
+    redirect: "error"
+  });
+  assert.equal(harness.requests[2].url, "https://api.track.toggl.com/api/v9/me");
+  assert.equal(
+    harness.requests[2].headers.Authorization,
+    `Basic ${btoa("session-token:api_token")}`
+  );
+  assert.equal(harness.storage[STORAGE_KEY].apiToken, "session-token");
+  assert.equal(harness.storage[STORAGE_KEY].profileName, "Session User");
+  assert.equal(harness.storage[STORAGE_KEY].togglUserId, 99);
+  assert.equal(harness.storage[STORAGE_KEY].jiraOrigin, JIRA_ORIGIN);
+  assert.equal(harness.storage[STORAGE_KEY].billable, true);
+  assert.equal(harness.storage[STORAGE_KEY].descriptionTemplate, "{key}: {summary}");
+  assert.equal(Object.hasOwn(result, "apiToken"), false);
+  assert.equal(Object.hasOwn(result, "togglUserId"), false);
+  assert.doesNotMatch(JSON.stringify(result), /session-token|old-token/);
+  assert.equal(harness.createdTabs.length, 0);
+});
+
+test("restores the running toolbar icon when connecting Toggl", async () => {
+  const harness = createHarness({ permissions: TOGGL_CONNECTION_MATCHES });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "session-token" }),
+    jsonResponse({ id: 99, default_workspace_id: 123 }),
+    jsonResponse({
+      id: 9001,
+      workspace_id: 123,
+      description: "Already running",
+      duration: -1
+    })
+  );
+
+  await harness.context.handleMessage(
+    { type: "CONNECT_TOGGL" },
+    harness.extensionSender("options.html")
+  );
+
+  assert.match(harness.requests[3].url, /\/me\/time_entries\/current$/);
+  assert.equal(harness.actionIconUpdates.at(-1)["16"], "icons/icon-running16.png");
+});
+
+test("requires both optional Toggl connection origins before checking the session", async () => {
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [TOGGL_ACCOUNTS_MATCH]
+  });
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_ACCOUNTS_PERMISSION_REQUIRED"
+  );
+
+  assert.equal(harness.requests.length, 0);
+  assert.deepEqual(harness.storage[STORAGE_KEY], configuredSettings());
+  assert.equal(harness.createdTabs.length, 0);
+});
+
+test("does not read the Toggl session when protected storage is unavailable", async () => {
+  const initialSettings = configuredSettings({ apiToken: "old-token" });
+  const harness = createHarness({
+    initialSettings,
+    permissions: TOGGL_CONNECTION_MATCHES,
+    storageAccessError: new Error("storage access failed")
+  });
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "PROTECTED_STORAGE_UNAVAILABLE"
+  );
+
+  assert.equal(harness.requests.length, 0);
+  assert.deepEqual(harness.storage[STORAGE_KEY], initialSettings);
+});
+
+test("opens Toggl login when the account session is missing and succeeds on retry", async () => {
+  const harness = createHarness({ permissions: TOGGL_CONNECTION_MATCHES });
+  harness.fetchQueue.push(
+    jsonResponse({ error: "session_id_not_present" }, 401),
+    jsonResponse({ data: { success: true } }),
+    jsonResponse({ data: { api_token: "session-token" } }),
+    jsonResponse({ id: 100, default_workspace_id: 321, email: "dev@example.com" }),
+    jsonResponse(null)
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_LOGIN_REQUIRED"
+  );
+
+  assert.deepEqual(harness.createdTabs, [{ url: TOGGL_LOGIN_URL }]);
+  assert.equal(Object.hasOwn(harness.storage, STORAGE_KEY), false);
+
+  const result = await harness.context.handleMessage(
+    { type: "CONNECT_TOGGL" },
+    harness.extensionSender("options.html")
+  );
+
+  assert.equal(result.hasApiToken, true);
+  assert.equal(result.workspaceId, 321);
+  assert.equal(harness.storage[STORAGE_KEY].apiToken, "session-token");
+  assert.equal(harness.requests[0].credentials, "include");
+  assert.equal(harness.requests[1].credentials, "include");
+  assert.equal(harness.createdTabs.length, 1);
+});
+
+test("gives an honest login instruction when Chrome cannot open the Toggl tab", async () => {
+  const harness = createHarness({
+    permissions: TOGGL_CONNECTION_MATCHES,
+    tabCreateError: new Error("tab failed")
+  });
+  harness.fetchQueue.push(jsonResponse({ error: "session_id_not_present" }, 401));
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_LOGIN_REQUIRED" &&
+      /Open the Toggl login page/i.test(error.message) &&
+      !/opened tab/i.test(error.message)
+  );
+
+  assert.deepEqual(harness.createdTabs, [{ url: TOGGL_LOGIN_URL }]);
+  assert.equal(Object.hasOwn(harness.storage, STORAGE_KEY), false);
+});
+
+test("rejects a malformed Toggl session without saving it", async (t) => {
+  for (const payload of [
+    {},
+    { success: false },
+    { success: "true" },
+    { data: { success: false } }
+  ]) {
+    await t.test(JSON.stringify(payload), async () => {
+      const harness = createHarness({ permissions: TOGGL_CONNECTION_MATCHES });
+      harness.fetchQueue.push(jsonResponse(payload));
+
+      await assert.rejects(
+        harness.context.handleMessage(
+          { type: "CONNECT_TOGGL" },
+          harness.extensionSender("options.html")
+        ),
+        (error) => error.code === "TOGGL_SESSION_UNSUPPORTED"
+      );
+
+      assert.equal(harness.requests.length, 1);
+      assert.equal(Object.hasOwn(harness.storage, STORAGE_KEY), false);
+      assert.equal(harness.createdTabs.length, 0);
+    });
+  }
+});
+
+test("opens Toggl Track for a missing profile session and succeeds on retry", async () => {
+  const initialSettings = configuredSettings({ apiToken: "old-token" });
+  const harness = createHarness({
+    initialSettings,
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ error: "authorization_missing" }, 401),
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ id: 99, default_workspace_id: 123, fullname: "Session User" }),
+    jsonResponse(null)
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_TRACK_SESSION_REQUIRED"
+  );
+
+  assert.equal(harness.requests[1].url, "https://track.toggl.com/api/v9/me");
+  assert.deepEqual(harness.createdTabs, [{ url: TOGGL_TRACK_WEB_URL }]);
+  assert.deepEqual(harness.storage[STORAGE_KEY], initialSettings);
+
+  const result = await harness.context.handleMessage(
+    { type: "CONNECT_TOGGL" },
+    harness.extensionSender("options.html")
+  );
+
+  assert.equal(result.hasApiToken, true);
+  assert.equal(harness.storage[STORAGE_KEY].apiToken, "new-token");
+  assert.equal(harness.createdTabs.length, 1);
+});
+
+test("rejects a Track web profile without an API token", async (t) => {
+  for (const payload of [{}, { api_token: " " }, { api_token: null }]) {
+    await t.test(JSON.stringify(payload), async () => {
+      const harness = createHarness({ permissions: TOGGL_CONNECTION_MATCHES });
+      harness.fetchQueue.push(
+        jsonResponse({ success: true }),
+        jsonResponse(payload)
+      );
+
+      await assert.rejects(
+        harness.context.handleMessage(
+          { type: "CONNECT_TOGGL" },
+          harness.extensionSender("options.html")
+        ),
+        (error) => error.code === "TOGGL_TRACK_PROFILE_UNSUPPORTED"
+      );
+
+      assert.equal(harness.requests.length, 2);
+      assert.equal(Object.hasOwn(harness.storage, STORAGE_KEY), false);
+    });
+  }
+});
+
+test("keeps the saved Toggl token when API validation fails", async () => {
+  const initialSettings = configuredSettings({ apiToken: "old-token" });
+  const harness = createHarness({
+    initialSettings,
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ error: "Forbidden" }, 403)
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_CONNECTION_VALIDATION_FAILED" &&
+      !String(error.message).includes("new-token")
+  );
+
+  assert.deepEqual(harness.storage[STORAGE_KEY], initialSettings);
+  assert.equal(harness.createdTabs.length, 0);
+});
+
+test("does not expose the session token through Toggl profile errors", async () => {
+  const initialSettings = configuredSettings({ apiToken: "old-token" });
+  const harness = createHarness({
+    initialSettings,
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ error: "Rejected token: new-token" }, 400)
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_CONNECTION_VALIDATION_FAILED" &&
+      !String(error.message).includes("new-token")
+  );
+
+  assert.deepEqual(harness.storage[STORAGE_KEY], initialSettings);
+});
+
+test("keeps settings and Work Logs when Toggl returns an invalid profile", async () => {
+  const initialSettings = configuredSettings({ apiToken: "old-token" });
+  const initialWorklogState = {
+    version: 1,
+    entries: { "9001": { togglEntryId: 9001, status: "pending" } }
+  };
+  const harness = createHarness({
+    initialSettings,
+    initialWorklogState,
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ id: "invalid", default_workspace_id: 123 })
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_PROFILE_INVALID"
+  );
+
+  assert.deepEqual(harness.storage[STORAGE_KEY], initialSettings);
+  assert.deepEqual(harness.storage[WORKLOG_STATE_KEY], initialWorklogState);
+});
+
+test("blocks an account switch while Jira-linked Toggl state is retained", async () => {
+  const initialSettings = configuredSettings({ apiToken: "old-token", workspaceId: 123 });
+  const initialWorklogState = {
+    version: 1,
+    entries: {
+      "9001": { togglEntryId: 9001, workspaceId: 123, status: "pending" }
+    }
+  };
+  const harness = createHarness({
+    initialSettings,
+    initialWorklogState,
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ id: 999, default_workspace_id: 999, fullname: "Another account" }),
+    jsonResponse(null)
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_ACCOUNT_SWITCH_REQUIRES_CLEAR"
+  );
+
+  assert.deepEqual(harness.storage[STORAGE_KEY], initialSettings);
+  assert.deepEqual(harness.storage[WORKLOG_STATE_KEY], initialWorklogState);
+});
+
+test("warns about the old running timer before retained Jira-linked state", async () => {
+  const initialSettings = configuredSettings({
+    apiToken: "old-token",
+    togglUserId: 77
+  });
+  const initialWorklogState = {
+    version: 1,
+    entries: { "9001": { togglEntryId: 9001, status: "pending" } }
+  };
+  const harness = createHarness({
+    initialSettings,
+    initialWorklogState,
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ id: 88, default_workspace_id: 123 }),
+    jsonResponse({ id: 9002, description: "Still running", duration: -1 })
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_ACCOUNT_SWITCH_TIMER_RUNNING"
+  );
+
+  assert.deepEqual(harness.storage[STORAGE_KEY], initialSettings);
+  assert.deepEqual(harness.storage[WORKLOG_STATE_KEY], initialWorklogState);
+});
+
+test("preserves a custom workspace when reconnecting the same Toggl user", async () => {
+  const initialWorklogState = {
+    version: 1,
+    entries: { "9001": { togglEntryId: 9001, workspaceId: 555, status: "pending" } }
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings({
+      apiToken: "old-token",
+      togglUserId: 77,
+      workspaceId: 555,
+      projectId: 777,
+      projectName: "Custom project"
+    }),
+    initialWorklogState,
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ id: 77, default_workspace_id: 123, fullname: "Same user" }),
+    jsonResponse(null)
+  );
+
+  await harness.context.handleMessage(
+    { type: "CONNECT_TOGGL" },
+    harness.extensionSender("options.html")
+  );
+
+  assert.equal(harness.storage[STORAGE_KEY].workspaceId, 555);
+  assert.equal(harness.storage[STORAGE_KEY].projectId, 777);
+  assert.deepEqual(harness.storage[WORKLOG_STATE_KEY], initialWorklogState);
+});
+
+test("resolves a legacy saved token before preserving same-user state", async () => {
+  const initialWorklogState = {
+    version: 1,
+    entries: { "9001": { togglEntryId: 9001, workspaceId: 555, status: "pending" } }
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings({
+      apiToken: "old-token",
+      togglUserId: null,
+      workspaceId: 555,
+      projectId: 777
+    }),
+    initialWorklogState,
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ id: 77, default_workspace_id: 123, fullname: "Same user" }),
+    jsonResponse({ id: 77, default_workspace_id: 123 }),
+    jsonResponse(null)
+  );
+
+  await harness.context.handleMessage(
+    { type: "CONNECT_TOGGL" },
+    harness.extensionSender("options.html")
+  );
+
+  assert.equal(harness.requests.length, 5);
+  assert.equal(
+    harness.requests[3].headers.Authorization,
+    `Basic ${btoa("old-token:api_token")}`
+  );
+  assert.equal(harness.storage[STORAGE_KEY].workspaceId, 555);
+  assert.deepEqual(harness.storage[WORKLOG_STATE_KEY], initialWorklogState);
+});
+
+test("detects a different user when migrating legacy settings", async () => {
+  const initialSettings = configuredSettings({
+    apiToken: "old-token",
+    togglUserId: null
+  });
+  const harness = createHarness({
+    initialSettings,
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ id: 88, default_workspace_id: 123, fullname: "New user" }),
+    jsonResponse({ id: 77, default_workspace_id: 123 }),
+    jsonResponse({ id: 9001, description: "Still running", duration: -1 })
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_ACCOUNT_SWITCH_TIMER_RUNNING"
+  );
+
+  assert.deepEqual(harness.storage[STORAGE_KEY], initialSettings);
+});
+
+test("keeps legacy settings when the previous Toggl identity cannot be verified", async () => {
+  const initialSettings = configuredSettings({
+    apiToken: "old-token",
+    togglUserId: null
+  });
+  const harness = createHarness({
+    initialSettings,
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ id: 88, default_workspace_id: 123 }),
+    jsonResponse({ error: "Forbidden" }, 403)
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_ACCOUNT_SWITCH_UNVERIFIED"
+  );
+
+  assert.deepEqual(harness.storage[STORAGE_KEY], initialSettings);
+});
+
+test("blocks a different Toggl user even when both users share the workspace", async () => {
+  const initialSettings = configuredSettings({
+    apiToken: "old-token",
+    togglUserId: 77,
+    workspaceId: 123,
+    projectId: 456
+  });
+  const initialWorklogState = {
+    version: 1,
+    entries: { "9001": { togglEntryId: 9001, workspaceId: 123, status: "pending" } }
+  };
+  const harness = createHarness({
+    initialSettings,
+    initialWorklogState,
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ id: 88, default_workspace_id: 123, fullname: "Another user" }),
+    jsonResponse(null)
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_ACCOUNT_SWITCH_REQUIRES_CLEAR"
+  );
+
+  assert.deepEqual(harness.storage[STORAGE_KEY], initialSettings);
+  assert.deepEqual(harness.storage[WORKLOG_STATE_KEY], initialWorklogState);
+});
+
+test("switches Toggl users when there is no retained Jira-linked state", async () => {
+  const harness = createHarness({
+    initialSettings: configuredSettings({ apiToken: "old-token", togglUserId: 77 }),
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ id: 88, default_workspace_id: 123, fullname: "Another user" }),
+    jsonResponse(null),
+    jsonResponse(null)
+  );
+
+  await harness.context.handleMessage(
+    { type: "CONNECT_TOGGL" },
+    harness.extensionSender("options.html")
+  );
+
+  assert.equal(harness.storage[STORAGE_KEY].togglUserId, 88);
+  assert.equal(harness.storage[STORAGE_KEY].projectId, null);
+});
+
+test("blocks an account switch while the old Toggl account has a running timer", async () => {
+  const initialSettings = configuredSettings({
+    apiToken: "old-token",
+    togglUserId: 77
+  });
+  const harness = createHarness({
+    initialSettings,
+    permissions: TOGGL_CONNECTION_MATCHES
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ success: true }),
+    jsonResponse({ api_token: "new-token" }),
+    jsonResponse({ id: 88, default_workspace_id: 123, fullname: "Another user" }),
+    jsonResponse({
+      id: 9001,
+      workspace_id: 123,
+      description: "Still running",
+      start: "2026-08-22T10:00:00Z",
+      duration: -1
+    })
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.extensionSender("options.html")
+    ),
+    (error) => error.code === "TOGGL_ACCOUNT_SWITCH_TIMER_RUNNING"
+  );
+
+  assert.deepEqual(harness.storage[STORAGE_KEY], initialSettings);
+});
+
+test("rejects Toggl session connection messages from Jira pages", async () => {
+  const harness = createHarness({ permissions: TOGGL_CONNECTION_MATCHES });
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "CONNECT_TOGGL" },
+      harness.jiraSender()
+    ),
+    (error) => error.code === "UNTRUSTED_SENDER"
+  );
+
+  assert.equal(harness.requests.length, 0);
+});
+
+test("settings messages cannot inject or replace the connected Toggl token", async () => {
+  const harness = createHarness({
+    initialSettings: configuredSettings({ apiToken: "connected-token" }),
+    permissions: [JIRA_MATCH]
+  });
+  harness.fetchQueue.push(
+    jsonResponse({ default_workspace_id: 123, fullname: "Dev QA" }),
+    jsonResponse({ id: 123, name: "Workspace QA" }),
+    jsonResponse(null)
+  );
+
+  await harness.context.handleMessage(
+    {
+      type: "VALIDATE_AND_SAVE_SETTINGS",
+      settings: {
+        jiraOrigin: JIRA_ORIGIN,
+        apiToken: "injected-token",
+        workspaceId: "",
+        projectId: ""
+      }
+    },
+    harness.extensionSender("options.html")
+  );
+
+  assert.equal(
+    harness.requests[0].headers.Authorization,
+    `Basic ${btoa("connected-token:api_token")}`
+  );
+  assert.equal(harness.storage[STORAGE_KEY].apiToken, "connected-token");
+});
+
 test("saves protected Toggl settings and synchronizes an existing running icon", async () => {
-  const harness = createHarness({ permissions: [JIRA_MATCH] });
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
   harness.fetchQueue.push(
     jsonResponse({ default_workspace_id: 123, fullname: "Dev QA" }),
     jsonResponse({ id: 123, name: "Workspace QA" }),
@@ -291,7 +984,6 @@ test("saves protected Toggl settings and synchronizes an existing running icon",
       type: "VALIDATE_AND_SAVE_SETTINGS",
       settings: {
         jiraOrigin: `${JIRA_ORIGIN}/jira/software/c/projects/ECP/boards/754/backlog`,
-        apiToken: "test-token",
         workspaceId: "",
         projectId: "456",
         billable: true,
@@ -672,7 +1364,10 @@ test("refreshes the side panel after a failed manual timer switch", async () => 
 });
 
 test("rejects unknown description variables before calling Toggl", async () => {
-  const harness = createHarness({ permissions: [JIRA_MATCH] });
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
 
   await assert.rejects(
     harness.context.handleMessage(
@@ -680,7 +1375,6 @@ test("rejects unknown description variables before calling Toggl", async () => {
         type: "VALIDATE_AND_SAVE_SETTINGS",
         settings: {
           jiraOrigin: JIRA_ORIGIN,
-          apiToken: "test-token",
           projectId: "456",
           descriptionTemplate: "[{ticket}] {summary}",
           billable: false,
@@ -753,7 +1447,7 @@ test("clearing settings unregisters the Jira script and removes the saved origin
         "9001": { togglEntryId: 9001, status: "pending", jiraOrigin: JIRA_ORIGIN }
       }
     },
-    permissions: [JIRA_MATCH]
+    permissions: [JIRA_MATCH, ...TOGGL_CONNECTION_MATCHES]
   });
   harness.registeredScripts.set("jira-toggl-quick-start-content", {
     id: "jira-toggl-quick-start-content",
@@ -770,8 +1464,48 @@ test("clearing settings unregisters the Jira script and removes the saved origin
   assert.equal(Object.hasOwn(harness.storage, STORAGE_KEY), false);
   assert.equal(Object.hasOwn(harness.storage, WORKLOG_STATE_KEY), false);
   assert.equal(harness.permissionOrigins.has(JIRA_MATCH), false);
+  assert.equal(harness.permissionOrigins.has(TOGGL_ACCOUNTS_MATCH), false);
+  assert.equal(harness.permissionOrigins.has(TOGGL_TRACK_WEB_MATCH), false);
   assert.equal(harness.registeredScripts.size, 0);
   assert.equal(harness.actionIconUpdates.at(-1)["16"], "icons/icon16.png");
+});
+
+test("clearing settings reports a Toggl permission cleanup failure honestly", async () => {
+  const harness = createHarness({
+    initialSettings: configuredSettings({ jiraOrigin: "" }),
+    permissions: TOGGL_CONNECTION_MATCHES,
+    permissionRemoveError: new Error("permission removal failed")
+  });
+
+  const result = await harness.context.handleMessage(
+    { type: "CLEAR_SETTINGS" },
+    harness.extensionSender("options.html")
+  );
+
+  assert.equal(result.cleared, true);
+  assert.match(result.permissionCleanupWarning, /could not remove site access/i);
+  assert.equal(Object.hasOwn(harness.storage, STORAGE_KEY), false);
+  assert.equal(harness.permissionOrigins.has(TOGGL_ACCOUNTS_MATCH), true);
+  assert.equal(harness.permissionOrigins.has(TOGGL_TRACK_WEB_MATCH), true);
+});
+
+test("clearing settings reports a Jira permission cleanup failure honestly", async () => {
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH],
+    permissionRemoveError: new Error("Jira permission removal failed"),
+    permissionRemoveErrorOrigins: [JIRA_MATCH]
+  });
+
+  const result = await harness.context.handleMessage(
+    { type: "CLEAR_SETTINGS" },
+    harness.extensionSender("options.html")
+  );
+
+  assert.equal(result.cleared, true);
+  assert.match(result.permissionCleanupWarning, /could not remove site access/i);
+  assert.equal(Object.hasOwn(harness.storage, STORAGE_KEY), false);
+  assert.equal(harness.permissionOrigins.has(JIRA_MATCH), true);
 });
 
 
@@ -1257,7 +1991,10 @@ test("falls back from Jira REST v3 to v2 for compatible Work Log deployments", a
 });
 
 test("rejects unknown Jira Work Log comment variables before calling either API", async () => {
-  const harness = createHarness({ permissions: [JIRA_MATCH] });
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
 
   await assert.rejects(
     harness.context.handleMessage(
@@ -1265,7 +2002,6 @@ test("rejects unknown Jira Work Log comment variables before calling either API"
         type: "VALIDATE_AND_SAVE_SETTINGS",
         settings: {
           jiraOrigin: JIRA_ORIGIN,
-          apiToken: "test-token",
           projectId: "456",
           descriptionTemplate: "[{key}] {summary}",
           billable: false,
@@ -1285,7 +2021,10 @@ test("rejects unknown Jira Work Log comment variables before calling either API"
 });
 
 test("automatically selects the most-used active project when Project ID is blank", async () => {
-  const harness = createHarness({ permissions: [JIRA_MATCH] });
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
   harness.fetchQueue.push(
     jsonResponse({
       default_workspace_id: 123,
@@ -1305,7 +2044,6 @@ test("automatically selects the most-used active project when Project ID is blan
       type: "VALIDATE_AND_SAVE_SETTINGS",
       settings: {
         jiraOrigin: JIRA_ORIGIN,
-        apiToken: "test-token",
         projectId: "",
         descriptionTemplate: "[{key}] {summary}"
       }
@@ -1321,7 +2059,10 @@ test("automatically selects the most-used active project when Project ID is blan
 });
 
 test("rejects a Toggl project that belongs to a different workspace", async () => {
-  const harness = createHarness({ permissions: [JIRA_MATCH] });
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
   harness.fetchQueue.push(
     jsonResponse({ default_workspace_id: 123, fullname: "Dev QA" }),
     jsonResponse({ id: 123, name: "Workspace QA" }),
@@ -1334,7 +2075,6 @@ test("rejects a Toggl project that belongs to a different workspace", async () =
         type: "VALIDATE_AND_SAVE_SETTINGS",
         settings: {
           jiraOrigin: JIRA_ORIGIN,
-          apiToken: "test-token",
           projectId: "456",
           descriptionTemplate: "[{key}] {summary}"
         }
@@ -1349,7 +2089,10 @@ test("rejects a Toggl project that belongs to a different workspace", async () =
 });
 
 test("rejects a Toggl project ID that does not exist", async () => {
-  const harness = createHarness({ permissions: [JIRA_MATCH] });
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
   harness.fetchQueue.push(
     jsonResponse({ default_workspace_id: 123, fullname: "Dev QA" }),
     jsonResponse({ id: 123, name: "Workspace QA" }),
@@ -1362,7 +2105,6 @@ test("rejects a Toggl project ID that does not exist", async () => {
         type: "VALIDATE_AND_SAVE_SETTINGS",
         settings: {
           jiraOrigin: JIRA_ORIGIN,
-          apiToken: "test-token",
           projectId: "456",
           descriptionTemplate: "[{key}] {summary}"
         }

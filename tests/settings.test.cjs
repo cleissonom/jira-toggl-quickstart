@@ -142,7 +142,6 @@ function createHarness({ initialSettings = null, permissions = [JIRA_MATCH] } = 
 function settingsInput(overrides = {}) {
   return {
     jiraOrigin: JIRA_ORIGIN,
-    apiToken: "test-token",
     workspaceId: "",
     projectId: "",
     billable: false,
@@ -160,6 +159,7 @@ function settingsInput(overrides = {}) {
 function savedSettings(overrides = {}) {
   return {
     apiToken: "test-token",
+    togglUserId: 99,
     jiraOrigin: JIRA_ORIGIN,
     workspaceId: 123,
     workspaceName: "Workspace QA",
@@ -179,7 +179,7 @@ function savedSettings(overrides = {}) {
 }
 
 test("loads related Toggl data and auto-selects the active project with the highest actual_hours", async () => {
-  const harness = createHarness();
+  const harness = createHarness({ initialSettings: savedSettings() });
   harness.fetchQueue.push(
     jsonResponse({
       default_workspace_id: 123,
@@ -208,7 +208,7 @@ test("loads related Toggl data and auto-selects the active project with the high
 });
 
 test("auto-selection supports projects nested under related workspaces", async () => {
-  const harness = createHarness();
+  const harness = createHarness({ initialSettings: savedSettings() });
   harness.fetchQueue.push(
     jsonResponse({
       default_workspace_id: 123,
@@ -229,7 +229,7 @@ test("auto-selection supports projects nested under related workspaces", async (
 });
 
 test("an explicit optional project ID overrides automatic selection and remains API-validated", async () => {
-  const harness = createHarness();
+  const harness = createHarness({ initialSettings: savedSettings() });
   harness.fetchQueue.push(
     jsonResponse({
       default_workspace_id: 123,
@@ -249,7 +249,7 @@ test("an explicit optional project ID overrides automatic selection and remains 
 });
 
 test("configuration remains usable when no active project is available", async () => {
-  const harness = createHarness();
+  const harness = createHarness({ initialSettings: savedSettings() });
   harness.fetchQueue.push(
     jsonResponse({
       default_workspace_id: 123,
@@ -308,6 +308,18 @@ test("a token and workspace are sufficient start configuration", () => {
   assert.equal(publicSettings.configurationRequired, "");
 });
 
+test("a validated token is connected before workspace setup is complete", () => {
+  const harness = createHarness();
+  const publicSettings = harness.context.toPublicSettings(
+    savedSettings({ workspaceId: null, workspaceName: "" }),
+    false
+  );
+
+  assert.equal(publicSettings.togglConnected, true);
+  assert.equal(publicSettings.togglConfigured, false);
+  assert.equal(publicSettings.configurationRequired, "workspace");
+});
+
 test("floating button position defaults safely and round-trips through settings", async () => {
   const legacyHarness = createHarness({
     initialSettings: savedSettings({ floatingButtonPosition: undefined })
@@ -325,7 +337,7 @@ test("floating button position defaults safely and round-trips through settings"
     /floating button position/i
   );
 
-  const saveHarness = createHarness();
+  const saveHarness = createHarness({ initialSettings: savedSettings() });
   saveHarness.fetchQueue.push(
     jsonResponse({ default_workspace_id: 123 }),
     jsonResponse({ id: 123, name: "Workspace QA" }),

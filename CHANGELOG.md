@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.7.1 — 2026-08-22
+
+- Replaced manual Toggl API-token entry with **Connect Toggl**, which requests exact optional Toggl Accounts and Track access, confirms the existing account session, retrieves the token from the signed-in Track web profile, validates it through the public API, and stores it only in protected local extension storage.
+- Added explicit login-and-retry handling for both web sessions, fail-closed response validation, atomic reconnect behavior, cross-account Work Log protection, token-injection protection for settings messages, and removal of both Toggl grants with extension settings.
+
 ## 0.7.0 — 2026-08-22
 
 - Replaced the toolbar popup with a persistent Chrome side panel that opens from the extension action and adapts to the browser-managed width and scrolling surface.
