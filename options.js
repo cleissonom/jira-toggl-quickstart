@@ -23,6 +23,7 @@ const jiraOriginInput = document.getElementById("jira-origin");
 const apiTokenInput = document.getElementById("api-token");
 const workspaceIdInput = document.getElementById("workspace-id");
 const projectIdInput = document.getElementById("project-id");
+const floatingButtonPositionInput = document.getElementById("floating-button-position");
 const templateInput = document.getElementById("description-template");
 const billableInput = document.getElementById("billable");
 const stopExistingInput = document.getElementById("stop-existing");
@@ -88,6 +89,7 @@ function applySettings(settings) {
   jiraOriginInput.value = currentJiraOrigin;
   workspaceIdInput.value = settings.workspaceId || "";
   projectIdInput.value = settings.projectId || "";
+  floatingButtonPositionInput.value = settings.floatingButtonPosition || "bottom-right";
   templateInput.value = settings.descriptionTemplate || DEFAULT_TEMPLATE;
   billableInput.checked = settings.billable === true;
   stopExistingInput.checked = settings.stopExisting !== false;
@@ -106,13 +108,14 @@ function applySettings(settings) {
 
   advancedSettings.open = Boolean(
     settings.descriptionTemplate !== DEFAULT_TEMPLATE ||
-    settings.stopExisting === false
+    settings.stopExisting === false ||
+    settings.floatingButtonPosition !== "bottom-right"
   );
 
   const pendingCount = Number(settings.pendingWorklogCount || 0);
   pendingWorklogs.textContent = pendingCount === 1
-    ? "1 Jira Work Log is waiting in the popup retry queue."
-    : `${pendingCount} Jira Work Logs are waiting in the popup retry queue.`;
+    ? "1 Jira Work Log is waiting in the side-panel retry queue."
+    : `${pendingCount} Jira Work Logs are waiting in the side-panel retry queue.`;
   pendingWorklogs.classList.toggle("hidden", pendingCount === 0);
 
   connectionBadge.classList.remove("connected");
@@ -183,7 +186,8 @@ async function saveSettings() {
       syncWorklogs: syncWorklogsInput.checked,
       worklogSyncMode: worklogSyncModeInput.value,
       worklogRounding: worklogRoundingInput.value,
-      worklogCommentTemplate: worklogCommentTemplateInput.value
+      worklogCommentTemplate: worklogCommentTemplateInput.value,
+      floatingButtonPosition: floatingButtonPositionInput.value
     }
   });
 
@@ -246,6 +250,7 @@ async function clearSettings() {
   worklogSyncModeInput.value = "automatic";
   worklogRoundingInput.value = "nearest-minute";
   worklogCommentTemplateInput.value = "Synced from Toggl: {description}";
+  floatingButtonPositionInput.value = "bottom-right";
   pendingWorklogs.classList.add("hidden");
   advancedSettings.open = false;
   apiTokenInput.required = true;

@@ -5,6 +5,10 @@ const workedTodayElement = document.getElementById("worked-today");
 const workedTodayValueElement = document.getElementById("worked-today-value");
 const workedWeekValueElement = document.getElementById("worked-week-value");
 const workedTodayMessageElement = document.getElementById("worked-today-message");
+const appointmentsElement = document.getElementById("today-appointments");
+const appointmentsCountElement = document.getElementById("appointments-count");
+const appointmentsEmptyElement = document.getElementById("appointments-empty");
+const appointmentsListElement = document.getElementById("appointments-list");
 const timerElement = document.getElementById("timer");
 const descriptionElement = document.getElementById("description");
 const billingElement = document.getElementById("billing");
@@ -19,8 +23,6 @@ const jiraProgressElement = document.getElementById("jira-progress");
 const jiraKeyElement = document.getElementById("jira-key");
 const jiraProgressSummaryElement = document.getElementById("jira-progress-summary");
 const jiraProgressDetailElement = document.getElementById("jira-progress-detail");
-const copyJiraButton = document.getElementById("copy-jira");
-const copyStatusElement = document.getElementById("copy-status");
 const worklogsElement = document.getElementById("worklogs");
 const worklogsCountElement = document.getElementById("worklogs-count");
 const worklogsListElement = document.getElementById("worklogs-list");
@@ -36,6 +38,9 @@ let currentSettings = null;
 let currentWorklogs = null;
 let currentWorkedToday = null;
 let currentJiraInsight = null;
+let currentAppointments = [];
+let appointmentRows = [];
+let appointmentBusySourceId = null;
 let clockTimer = null;
 let loadSequence = 0;
 let midnightRefreshPending = false;
@@ -52,13 +57,25 @@ syncWorklogsButton.addEventListener("click", () => {
   void syncPendingWorklogs();
 });
 
-copyJiraButton.addEventListener("click", () => {
-  void copyJiraDetails();
-});
-
 manualForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void startManualTimer();
+});
+
+window.addEventListener("focus", () => {
+  void loadState();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    void loadState();
+  }
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === "SIDE_PANEL_STATE_CHANGED") {
+    void loadState();
+  }
 });
 
 void loadState();
@@ -82,6 +99,7 @@ async function loadState() {
     manualElement.classList.add("hidden");
     timerElement.classList.add("hidden");
     jiraProgressElement.classList.add("hidden");
+    appointmentsElement.classList.add("hidden");
     worklogsElement.classList.add("hidden");
     stopButton.classList.add("hidden");
     setError(response.error?.message || "Could not check Toggl.");
@@ -95,8 +113,8 @@ async function loadState() {
   currentJiraInsight = jira || { status: "not-applicable" };
 
   renderWorkspace(currentSettings);
-  renderWorkedToday(currentWorkedToday);
   renderCurrent(current, currentSettings);
+  renderWorkedToday(currentWorkedToday);
   renderJira(currentJiraInsight);
   renderWorklogs(currentWorklogs);
   restartClock();
@@ -122,6 +140,7 @@ function renderWorkedToday(summary) {
 
   if (currentWorkedToday.status === "ok") {
     renderWorkedValues(currentWorkedToday);
+    renderAppointments(currentWorkedToday);
     workedTodayMessageElement.textContent = "";
     workedTodayMessageElement.classList.add("hidden");
     return;
@@ -132,6 +151,7 @@ function renderWorkedToday(summary) {
   workedTodayMessageElement.textContent = currentWorkedToday.message ||
     "Worked totals are unavailable.";
   workedTodayMessageElement.classList.remove("hidden");
+  renderAppointments(currentWorkedToday);
 }
 
 function renderWorkedValues(summary) {
@@ -140,6 +160,147 @@ function renderWorkedValues(summary) {
   );
   workedWeekValueElement.textContent = formatWorkedDuration(
     getLiveWorkedSeconds(summary, "weekTotalSeconds")
+  );
+  updateAppointmentValues();
+}
+
+function renderAppointments(summary) {
+  currentWorkedToday = summary || currentWorkedToday;
+  currentAppointments = Array.isArray(summary?.appointments)
+    ? summary.appointments
+    : [];
+  appointmentRows = [];
+  appointmentsListElement.replaceChildren();
+
+  if (summary?.status !== "ok") {
+    appointmentsElement.classList.add("hidden");
+    return;
+  }
+
+  appointmentsElement.classList.remove("hidden");
+  appointmentsCountElement.textContent = `${currentAppointments.length} ${
+    currentAppointments.length === 1 ? "entry" : "entries"
+  }`;
+  appointmentsEmptyElement.classList.toggle("hidden", currentAppointments.length > 0);
+  currentAppointments.forEach((appointment, index) => {
+    appointmentsListElement.appendChild(createAppointmentItem(appointment, index));
+  });
+  updateAppointmentValues();
+}
+
+function createAppointmentItem(appointment, index) {
+  const item = document.createElement("li");
+  const copy = createAppointmentCopy(appointment);
+  const button = document.createElement("button");
+  button.className = "secondary appointment-play";
+  button.type = "button";
+  button.addEventListener("click", () => void startTodayAppointment(index));
+  item.append(copy.container, button);
+  appointmentRows.push({ appointment, duration: copy.duration, button });
+  updateAppointmentButton(appointmentRows.at(-1));
+  return item;
+}
+
+function createAppointmentCopy(appointment) {
+  const container = document.createElement("div");
+  container.className = "appointment-copy";
+  const title = document.createElement("strong");
+  title.className = "appointment-title";
+  title.textContent = appointment.description || "No description";
+  const meta = document.createElement("span");
+  meta.className = "appointment-meta";
+  if (appointment.issueKey) {
+    const issueKey = document.createElement("span");
+    issueKey.className = "appointment-key";
+    issueKey.textContent = appointment.issueKey;
+    meta.appendChild(issueKey);
+  }
+  const duration = document.createElement("span");
+  duration.className = "appointment-duration";
+  meta.appendChild(duration);
+  container.append(title, meta);
+  return { container, duration };
+}
+
+function updateAppointmentValues() {
+  for (const row of appointmentRows) {
+    row.duration.textContent = formatWorkedDuration(
+      getLiveAppointmentSeconds(row.appointment, currentWorkedToday)
+    );
+  }
+}
+
+function updateAppointmentButtons() {
+  for (const row of appointmentRows) {
+    updateAppointmentButton(row);
+  }
+}
+
+function updateAppointmentButton(row) {
+  const running = isAppointmentRunning(row.appointment);
+  const busy = appointmentBusySourceId !== null;
+  const starting = appointmentBusySourceId === Number(row.appointment.sourceEntryId);
+  row.button.disabled = running || busy;
+  row.button.textContent = running ? "Running" : starting ? "Starting…" : "Play";
+  const name = row.appointment.issueKey || row.appointment.description || "appointment";
+  row.button.setAttribute(
+    "aria-label",
+    running ? `${name} is running` : `Play ${name}`
+  );
+}
+
+function isAppointmentRunning(appointment) {
+  const runningEntryId = Number(appointment?.runningEntryId || 0);
+  return runningEntryId > 0 && runningEntryId === Number(currentEntry?.id || 0);
+}
+
+function getLiveAppointmentSeconds(appointment, summary, nowMs = Date.now()) {
+  return getLiveWorkedSeconds({
+    ...appointment,
+    calculatedAt: summary?.calculatedAt
+  }, "totalSeconds", nowMs);
+}
+
+async function startTodayAppointment(index) {
+  const appointment = currentAppointments[index];
+  if (!appointment || appointmentBusySourceId !== null || isAppointmentRunning(appointment)) {
+    return;
+  }
+
+  appointmentBusySourceId = Number(appointment.sourceEntryId);
+  setError("");
+  setNotice("");
+  updateAppointmentButtons();
+  const response = await sendMessage({
+    type: "START_TODAY_APPOINTMENT",
+    sourceEntryId: appointment.sourceEntryId
+  });
+  appointmentBusySourceId = null;
+
+  if (!response.ok) {
+    updateAppointmentButtons();
+    setError(response.error?.message || "Could not start the appointment.");
+    return;
+  }
+
+  await loadState();
+  showAppointmentStartResult(response.data);
+}
+
+function showAppointmentStartResult(result) {
+  if (result?.action === "already-running") {
+    setNotice("This appointment is already running in Toggl.", "success");
+    return;
+  }
+  if (result?.previousWorklogSync) {
+    showWorklogResult(result.previousWorklogSync, true);
+    return;
+  }
+  setNotice(
+    result?.stoppedPrevious
+      ? "The previous timer stopped and the appointment started."
+      : "Appointment started in Toggl.",
+    "success"
   );
 }
 
@@ -155,7 +316,6 @@ function renderCurrent(entry, settings = currentSettings) {
       emptyElement.classList.add("hidden");
       renderManualDefaults(currentSettings);
       manualElement.classList.remove("hidden");
-      window.setTimeout(() => manualDescriptionInput.focus(), 0);
     } else {
       manualElement.classList.add("hidden");
       emptyElement.textContent = configurationMessage(currentSettings, false);
@@ -210,11 +370,9 @@ function renderManualDefaults(settings) {
 
 function renderJira(insight) {
   currentJiraInsight = insight || { status: "not-applicable" };
-  setCopyStatus("");
 
   if (currentJiraInsight.status === "not-applicable") {
     jiraProgressElement.classList.add("hidden");
-    copyJiraButton.classList.add("hidden");
     return;
   }
 
@@ -225,16 +383,12 @@ function renderJira(insight) {
     jiraProgressSummaryElement.textContent = "Progress unavailable";
     jiraProgressDetailElement.textContent = currentJiraInsight.message ||
       "Jira details could not be loaded. You can still stop the timer.";
-    copyJiraButton.classList.add("hidden");
     return;
   }
 
   const lines = getJiraProgressLines(currentJiraInsight);
   jiraProgressSummaryElement.textContent = lines.summary;
   jiraProgressDetailElement.textContent = lines.detail;
-  copyJiraButton.disabled = false;
-  copyJiraButton.textContent = "Copy Jira title & description";
-  copyJiraButton.classList.remove("hidden");
 }
 
 function getJiraProgressLines(insight) {
@@ -263,33 +417,6 @@ function getJiraProgressLines(insight) {
     summary,
     detail: `${formatWorkedDuration(left)} left`
   };
-}
-
-async function copyJiraDetails() {
-  if (currentJiraInsight?.status !== "ok" || !currentJiraInsight.clipboardText) {
-    setCopyStatus("Jira details are not ready to copy.", true);
-    return;
-  }
-
-  copyJiraButton.disabled = true;
-  copyJiraButton.textContent = "Copying…";
-  setCopyStatus("");
-
-  try {
-    await navigator.clipboard.writeText(currentJiraInsight.clipboardText);
-    setCopyStatus("Copied to clipboard");
-  } catch {
-    setCopyStatus("Could not copy. Check clipboard access and try again.", true);
-  } finally {
-    copyJiraButton.disabled = false;
-    copyJiraButton.textContent = "Copy Jira title & description";
-  }
-}
-
-function setCopyStatus(message, isError = false) {
-  copyStatusElement.textContent = message;
-  copyStatusElement.classList.toggle("hidden", !message);
-  copyStatusElement.classList.toggle("error-state", Boolean(message && isError));
 }
 
 function renderWorklogs(worklogs) {
@@ -554,7 +681,7 @@ async function sendMessage(message) {
   } catch {
     return {
       ok: false,
-      error: { message: "The extension was reloaded. Open the popup again." }
+      error: { message: "The extension was reloaded. Open the side panel again." }
     };
   }
 }

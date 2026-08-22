@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.7.0 — 2026-08-22
+
+- Replaced the toolbar popup with a persistent Chrome side panel that opens from the extension action and adapts to the browser-managed width and scrolling surface.
+- Added a live **Today's appointments** list that aggregates named Toggl entries for the local day and replays them from the side panel.
+- Made replay stop any current timer through the existing Jira Work Log flow, preserve known Jira linkage on the new entry, and keep Jira-looking manual entries Toggl-only.
+- Retained a bounded history of completed Jira timer associations so sync-disabled Jira work can be recognized safely when replayed.
+- Moved **Copy Jira title & description** beside the floating Jira timer button, fixed the user-gesture copy flow, and added accessible busy/success animation without adding clipboard permission.
+- Added top-left, top-right, bottom-left, and bottom-right placement options for the Jira timer and copy controls.
+- Raised the minimum supported Chrome version to 114 and added the required `sidePanel` permission.
+- Updated release metadata, automated coverage, privacy and security disclosures, store copy, and maintainer documentation for v0.7.0.
+
 ## 0.6.0 — 2026-08-21
 
 - Added a Monday–Sunday **Worked this week** total beside **Worked today**, using one Toggl request and local live updates for a running timer.

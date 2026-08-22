@@ -114,7 +114,7 @@ test("settings page exposes every supported template variable as an insert butto
   }
 });
 
-test("popup contains a manual timer form shown when no timer is running", () => {
+test("side panel contains a manual timer form shown when no timer is running", () => {
   const html = read("popup.html");
   const script = read("popup.js");
 
@@ -144,13 +144,13 @@ test("manifest uses runtime Jira host permission and has no hard-coded company J
 
 test("extension pages and primary actions are presented in English", () => {
   const optionsHtml = read("options.html");
-  const popupHtml = read("popup.html");
+  const sidePanelHtml = read("popup.html");
   const contentScript = read("content.js");
 
   assert.match(optionsHtml, /<html lang="en">/);
-  assert.match(popupHtml, /<html lang="en">/);
+  assert.match(sidePanelHtml, /<html lang="en">/);
   assert.match(optionsHtml, />Connect and save</);
-  assert.match(popupHtml, />Start timer</);
+  assert.match(sidePanelHtml, />Start timer</);
   assert.match(contentScript, /Start in Toggl/);
   assert.match(contentScript, /Stop in Toggl/);
 });
@@ -208,7 +208,7 @@ test("settings expose optional Jira Work Log synchronization controls", () => {
   assert.match(script, /worklogSyncMode: worklogSyncModeInput\.value/);
 });
 
-test("popup exposes a local pending Work Log retry workflow", () => {
+test("side panel exposes a local pending Work Log retry workflow", () => {
   const html = read("popup.html");
   const script = read("popup.js");
 
@@ -298,14 +298,14 @@ test("running icon uses the high-contrast 0.6.0 palette", () => {
   assert.deepEqual(readPixel(image, 84, 68), [26, 244, 252, 255]);
 });
 
-test("release metadata is set to version 0.6.0", () => {
+test("release metadata is set to version 0.7.0", () => {
   const manifest = JSON.parse(read("manifest.json"));
   const packageJson = JSON.parse(read("package.json"));
-  assert.equal(manifest.version, "0.6.0");
-  assert.equal(packageJson.version, "0.6.0");
-  assert.match(manifest.description, /daily and weekly totals/i);
-  assert.match(read("CHANGELOG.md"), /## 0\.6\.0 — 2026-08-21/);
-  assert.match(read(".github/ISSUE_TEMPLATE/bug_report.yml"), /placeholder: 0\.6\.0/);
+  assert.equal(manifest.version, "0.7.0");
+  assert.equal(packageJson.version, "0.7.0");
+  assert.match(manifest.description, /today/i);
+  assert.match(read("CHANGELOG.md"), /## 0\.7\.0 — 2026-08-22/);
+  assert.match(read(".github/ISSUE_TEMPLATE/bug_report.yml"), /placeholder: 0\.7\.0/);
 });
 
 test("extension stylesheets have balanced blocks and one Work Log settings block", () => {
@@ -322,38 +322,60 @@ test("extension stylesheets have balanced blocks and one Work Log settings block
   assert.equal((optionsCss.match(/\.worklog-card\s*\{/g) || []).length, 1);
 });
 
-test("popup rounds both bottom corners by 16px", () => {
-  const css = read("popup.css");
-  const rootRule = css.match(/:root\s*\{([^}]*)\}/)?.[1] || "";
-  const bodyRule = css.match(/body\s*\{([^}]*)\}/)?.[1] || "";
+test("toolbar action opens a global Chrome side panel", () => {
+  const manifest = JSON.parse(read("manifest.json"));
 
-  assert.match(rootRule, /background:\s*transparent/);
-  assert.match(bodyRule, /border-bottom-left-radius:\s*16px/);
-  assert.match(bodyRule, /border-bottom-right-radius:\s*16px/);
-  assert.match(bodyRule, /overflow:\s*hidden/);
+  assert.ok(Number(manifest.minimum_chrome_version) >= 114);
+  assert.ok(manifest.permissions.includes("sidePanel"));
+  assert.equal(manifest.side_panel?.default_path, "popup.html");
+  assert.equal(Object.hasOwn(manifest.action, "default_popup"), false);
+  assert.match(manifest.action.default_title, /side panel/i);
+});
+
+test("side panel is responsive and uses the browser as its single scroll surface", () => {
+  const css = read("popup.css");
+  const bodyRule = css.match(/body\s*\{([^}]*)\}/)?.[1] || "";
+  const appointmentsRule = css.match(/\.appointments ul\s*\{([^}]*)\}/)?.[1] || "";
+
+  assert.doesNotMatch(bodyRule, /width:\s*360px/);
+  assert.doesNotMatch(bodyRule, /border(?:-radius)?:/);
+  assert.doesNotMatch(bodyRule, /overflow:\s*hidden/);
+  assert.doesNotMatch(appointmentsRule, /overflow-y:\s*auto/);
+  assert.doesNotMatch(appointmentsRule, /max-height:/);
+});
+
+test("settings expose all four validated floating button positions", () => {
+  const html = read("options.html");
+  const select = html.match(/<select id="floating-button-position"[\s\S]*?<\/select>/)?.[0] || "";
+  assert.match(select, /value="top-left"/);
+  assert.match(select, /value="top-right"/);
+  assert.match(select, /value="bottom-left"/);
+  assert.match(select, /value="bottom-right"[^>]*selected/);
+  assert.match(html, /Floating button position/);
 });
 
 test("Toggl Project ID is optional and supports automatic selection", () => {
   const html = read("options.html");
   const projectIndex = html.indexOf('id="project-id"');
   const advancedIndex = html.indexOf('id="advanced-settings"');
+  const projectInput = html.match(/<input\b[^>]*\bid="project-id"[^>]*>/)?.[0] || "";
 
   assert.ok(projectIndex >= 0);
   assert.ok(projectIndex < advancedIndex, "Project ID should appear before Advanced settings");
   assert.match(html, /project ID/i);
   assert.match(html, /optional/i);
   assert.match(html, /actual_hours/);
-  assert.doesNotMatch(html, /id="project-id"[\s\S]*?required/);
+  assert.doesNotMatch(projectInput, /\brequired\b/);
   assert.doesNotMatch(html, /required-indicator/);
 });
 
-test("popup presents daily total and Jira details in the requested compact order", () => {
+test("side panel presents timer, Jira progress, and today's appointments in the requested order", () => {
   const html = read("popup.html");
   const order = [
     'id="worked-today"',
     'id="timer"',
     'id="jira-progress"',
-    'id="copy-jira"',
+    'id="today-appointments"',
     'id="stop"',
     'id="worklogs"',
     'id="settings"'
@@ -366,13 +388,19 @@ test("popup presents daily total and Jira details in the requested compact order
   assert.match(html, /Worked today/);
   assert.match(html, /id="worked-week-value"/);
   assert.match(html, /Worked this week/);
+  assert.match(html, /Today(?:'s|&apos;) appointments/);
+  assert.match(html, /id="appointments-list"/);
   assert.match(html, /Jira progress/);
-  assert.match(html, /Copy Jira title &amp; description/);
+  assert.doesNotMatch(html, /id="copy-jira"/);
+  const timerSection = html.match(/<section\b[^>]*\bid="timer"[^>]*>/)?.[0] || "";
+  assert.doesNotMatch(timerSection, /aria-live/);
 });
 
-test("popup keeps live daily and weekly totals local and refreshes after timer changes", () => {
+test("side panel keeps live daily and weekly totals local and refreshes after timer changes", () => {
   const script = read("popup.js");
   assert.match(script, /getLiveWorkedSeconds/);
+  assert.match(script, /getLiveAppointmentSeconds/);
+  assert.match(script, /START_TODAY_APPOINTMENT/);
   assert.match(script, /calculatedAt/);
   assert.match(script, /window\.setInterval\(updateLiveValues, 1000\)/);
   assert.match(script, /await loadState\(\);\n  showWorklogResult\(worklogResult/);
@@ -381,12 +409,39 @@ test("popup keeps live daily and weekly totals local and refreshes after timer c
 
 test("Jira copy uses the explicit clipboard API without a broad permission", () => {
   const manifest = JSON.parse(read("manifest.json"));
-  const script = read("popup.js");
+  const content = read("content.js");
+  const sidePanel = read("popup.js");
 
   assert.doesNotMatch(JSON.stringify(manifest.permissions), /clipboard/i);
-  assert.match(script, /navigator\.clipboard\.writeText\(currentJiraInsight\.clipboardText\)/);
-  assert.match(script, /Copied to clipboard/);
-  assert.match(script, /Check clipboard access and try again/);
+  assert.match(content, /GET_JIRA_CLIPBOARD/);
+  assert.match(content, /navigator\.clipboard\.writeText\(/);
+  assert.match(content, /Copied Jira title & description/);
+  assert.match(content, /Could not copy/);
+  assert.doesNotMatch(sidePanel, /navigator\.clipboard/);
+  assert.match(content, /id="copy-jira"/);
+  assert.match(content, /aria-label="Copy Jira title & description"/);
+  assert.match(content, /class="controls"[\s\S]*id="toggle"[\s\S]*id="copy-jira"/);
+});
+
+test("floating and side-panel controls remain accessible without blocking Jira", () => {
+  const content = read("content.js");
+  const popupCss = read("popup.css");
+  const messageRule = content.match(/\.message\s*\{([\s\S]*?)\n\s*\}/)?.[1] || "";
+  const contentFocusRule = content.match(
+    /\.controls button:focus-visible\s*\{([\s\S]*?)\n\s*\}/
+  )?.[1] || "";
+  const popupFocusRule = popupCss.match(
+    /button:focus-visible,\s*\ninput:focus-visible\s*\{([^}]*)\}/
+  )?.[1] || "";
+  const worklogRule = popupCss.match(/\.worklogs li\s*\{([^}]*)\}/)?.[1] || "";
+
+  assert.match(messageRule, /pointer-events:\s*none/);
+  assert.match(content, /id="icon" class="icon" aria-hidden="true"/);
+  assert.match(contentFocusRule, /outline:\s*3px solid #172b4d/);
+  assert.doesNotMatch(contentFocusRule, /rgba/);
+  assert.match(popupFocusRule, /outline:\s*3px solid #172b4d/);
+  assert.doesNotMatch(popupFocusRule, /rgba/);
+  assert.match(worklogRule, /overflow-wrap:\s*anywhere/);
 });
 
 test("Jira pages prioritize stopping the current issue without requiring a project", () => {
@@ -401,7 +456,7 @@ test("Jira pages prioritize stopping the current issue without requiring a proje
   assert.doesNotMatch(script, /valid Toggl project ID is required/i);
 });
 
-test("release documentation describes the v0.6.0 timer insights and icon states", () => {
+test("release documentation describes the v0.7.0 side panel and Jira controls", () => {
   const readme = read("README.md");
   const privacy = read("PRIVACY.md");
   const security = read("SECURITY.md");
@@ -409,20 +464,30 @@ test("release documentation describes the v0.6.0 timer insights and icon states"
   const changelog = read("CHANGELOG.md");
   const releasing = read("RELEASING.md");
 
-  assert.match(changelog, /## 0\.6\.0 — 2026-08-21/);
+  assert.match(changelog, /## 0\.7\.0 — 2026-08-22/);
+  assert.match(changelog, /side panel/i);
+  assert.match(readme, /today's appointments/i);
+  assert.match(readme, /Play/i);
+  assert.match(readme, /top-left.*top-right.*bottom-left.*bottom-right/is);
+  assert.match(readme, /beside the floating/i);
   assert.match(readme, /active project.*highest `actual_hours`/i);
   assert.match(readme, /Worked today/);
   assert.match(readme, /Worked this week/);
+  assert.match(readme, /side panel/i);
   assert.match(readme, /high-contrast black, cyan, and white running-state toolbar icon/i);
   assert.match(readme, /rounded toolbar icons/i);
   assert.match(readme, /Jira's actual logged time/);
   assert.match(readme, /logged duration reduces the remaining estimate/i);
   assert.match(privacy, /browser-local Sunday preceding the current week/);
-  assert.match(privacy, /summary, description, logged time, original estimate, and remaining estimate/);
+  assert.match(privacy, /floating button position/i);
+  assert.match(privacy, /per-appointment/i);
   assert.match(privacy, /only after the user explicitly clicks/);
+  assert.match(security, /source time-entry ID/i);
   assert.match(security, /no remote JavaScript, `eval`, `new Function`/);
   assert.match(store, /No clipboard permission is requested/);
-  assert.match(releasing, /v0\.6\.0/);
+  assert.match(store, /side panel/i);
+  assert.match(releasing, /v0\.7\.0/);
+  assert.match(releasing, /all four floating-button positions/i);
   assert.match(releasing, /changelog.*generated comparison notes/i);
 });
 

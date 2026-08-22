@@ -24,14 +24,21 @@ const RUNNING_ACTION_ICON_PATHS = Object.freeze({
   128: "icons/icon-running128.png"
 });
 const JIRA_ISSUE_KEY_PATTERN = /\b([A-Z][A-Z0-9_]*-\d+)\b/i;
-const JIRA_INSIGHT_FIELDS = Object.freeze([
+const JIRA_PROGRESS_FIELDS = Object.freeze([
   "summary",
-  "description",
   "timetracking",
   "timespent",
   "timeoriginalestimate",
   "timeestimate"
 ]);
+const JIRA_CLIPBOARD_FIELDS = Object.freeze(["summary", "description"]);
+const FLOATING_BUTTON_POSITIONS = Object.freeze([
+  "top-left",
+  "top-right",
+  "bottom-left",
+  "bottom-right"
+]);
+const FLOATING_BUTTON_POSITION_SET = new Set(FLOATING_BUTTON_POSITIONS);
 
 const ISSUE_TEMPLATE_VARIABLES = Object.freeze([
   "key",
@@ -71,10 +78,12 @@ const DEFAULT_SETTINGS = Object.freeze({
   syncWorklogs: false,
   worklogSyncMode: "automatic",
   worklogRounding: "nearest-minute",
-  worklogCommentTemplate: "Synced from Toggl: {description}"
+  worklogCommentTemplate: "Synced from Toggl: {description}",
+  floatingButtonPosition: "bottom-right"
 });
 
 const worklogSyncLocks = new Map();
+let extensionMutationQueue = Promise.resolve();
 let actionIconRevision = 0;
 
 class UserFacingError extends Error {
@@ -90,6 +99,10 @@ class UserFacingError extends Error {
 void chrome.storage.local
   .setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" })
   .catch(() => undefined);
+
+void chrome.sidePanel
+  .setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((error) => console.error("Could not configure the side panel.", error));
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   void initializeExtension(reason);
@@ -143,21 +156,34 @@ async function handleMessage(message, sender) {
   }
 
   switch (message.type) {
-    case "GET_TIMER_STATUS":
-      await assertJiraOrExtensionSender(sender);
-      return getTimerStatus(message.issue);
+    case "GET_TIMER_STATUS": {
+      const settings = await assertJiraOrExtensionSender(sender);
+      return getTimerStatus(message.issue, settings);
+    }
 
     case "START_TIMER":
-      await assertJiraSender(sender);
-      return startTimer(message.issue);
+      return notifySidePanelAfter(serializeExtensionMutation(async () => {
+        const settings = await assertJiraSender(sender);
+        return startTimer(message.issue, settings);
+      }));
 
     case "START_MANUAL_TIMER":
       assertExtensionPageSender(sender);
-      return startManualTimer(message.description);
+      return notifySidePanelAfter(serializeExtensionMutation(
+        () => startManualTimer(message.description)
+      ));
+
+    case "START_TODAY_APPOINTMENT":
+      assertExtensionPageSender(sender);
+      return notifySidePanelAfter(serializeExtensionMutation(
+        () => startTodayAppointment(message.sourceEntryId)
+      ));
 
     case "STOP_TIMER":
-      await assertJiraSender(sender);
-      return stopTimerForIssue(message.issue);
+      return notifySidePanelAfter(serializeExtensionMutation(async () => {
+        const settings = await assertJiraSender(sender);
+        return stopTimerForIssue(message.issue, settings);
+      }));
 
     case "GET_POPUP_STATE":
       assertExtensionPageSender(sender);
@@ -165,23 +191,39 @@ async function handleMessage(message, sender) {
 
     case "STOP_CURRENT_TIMER":
       assertExtensionPageSender(sender);
-      return stopCurrentTimer();
+      return notifySidePanelAfter(serializeExtensionMutation(
+        () => stopCurrentTimer()
+      ));
 
     case "SYNC_PENDING_WORKLOGS":
       assertExtensionPageSender(sender);
-      return syncPendingWorklogs();
+      return notifySidePanelAfter(serializeExtensionMutation(
+        () => syncPendingWorklogs()
+      ));
 
     case "GET_OPTIONS_STATE":
       assertExtensionPageSender(sender);
       return getOptionsState();
 
+    case "GET_JIRA_UI_SETTINGS": {
+      const settings = await assertJiraSender(sender);
+      return getJiraUiSettings(settings);
+    }
+
+    case "GET_JIRA_CLIPBOARD": {
+      const settings = await assertJiraSender(sender);
+      return getJiraClipboard(message.issueKey, settings);
+    }
+
     case "VALIDATE_AND_SAVE_SETTINGS":
       assertExtensionPageSender(sender);
-      return validateAndSaveSettings(message.settings);
+      return notifySidePanelAfter(serializeExtensionMutation(
+        () => validateAndSaveSettings(message.settings)
+      ));
 
     case "CLEAR_SETTINGS":
       assertExtensionPageSender(sender);
-      return clearSettings();
+      return notifySidePanelAfter(serializeExtensionMutation(() => clearSettings()));
 
     case "OPEN_OPTIONS":
       await assertJiraOrExtensionSender(sender);
@@ -193,6 +235,24 @@ async function handleMessage(message, sender) {
   }
 }
 
+async function notifySidePanelAfter(operation) {
+  try {
+    return await operation;
+  } finally {
+    void chrome.runtime
+      .sendMessage({ type: "SIDE_PANEL_STATE_CHANGED" })
+      .catch(() => undefined);
+  }
+}
+
+function serializeExtensionMutation(operation) {
+  const queued = extensionMutationQueue
+    .catch(() => undefined)
+    .then(operation);
+  extensionMutationQueue = queued;
+  return queued;
+}
+
 async function assertJiraSender(sender) {
   const settings = await getSettings();
 
@@ -202,6 +262,8 @@ async function assertJiraSender(sender) {
       "This page is not the authorized Jira site."
     );
   }
+
+  return settings;
 }
 
 function assertExtensionPageSender(sender) {
@@ -215,10 +277,10 @@ function assertExtensionPageSender(sender) {
 
 async function assertJiraOrExtensionSender(sender) {
   if (isExtensionPageSender(sender)) {
-    return;
+    return null;
   }
 
-  await assertJiraSender(sender);
+  return assertJiraSender(sender);
 }
 
 function isExtensionPageSender(sender) {
@@ -273,6 +335,9 @@ async function getSettings() {
     worklogRounding: coerceWorklogRounding(savedSettings.worklogRounding),
     worklogCommentTemplate: coerceWorklogCommentTemplate(
       savedSettings.worklogCommentTemplate
+    ),
+    floatingButtonPosition: coerceFloatingButtonPosition(
+      savedSettings.floatingButtonPosition
     )
   };
 }
@@ -317,7 +382,8 @@ function toPublicSettings(settings, jiraPermissionGranted = false) {
     syncWorklogs: settings.syncWorklogs === true,
     worklogSyncMode: settings.worklogSyncMode,
     worklogRounding: settings.worklogRounding,
-    worklogCommentTemplate: settings.worklogCommentTemplate
+    worklogCommentTemplate: settings.worklogCommentTemplate,
+    floatingButtonPosition: settings.floatingButtonPosition
   };
 }
 
@@ -333,6 +399,13 @@ async function getOptionsState() {
   return {
     ...publicSettings,
     pendingWorklogCount: worklogs.pendingCount
+  };
+}
+
+async function getJiraUiSettings(settingsInput = null) {
+  const settings = settingsInput || await getSettings();
+  return {
+    floatingButtonPosition: settings.floatingButtonPosition
   };
 }
 
@@ -369,6 +442,9 @@ async function validateAndSaveSettings(input) {
   const worklogRounding = normalizeWorklogRounding(candidate.worklogRounding);
   const worklogCommentTemplate = normalizeWorklogCommentTemplate(
     candidate.worklogCommentTemplate
+  );
+  const floatingButtonPosition = normalizeFloatingButtonPosition(
+    candidate.floatingButtonPosition
   );
 
   const me = await togglRequest("/api/v9/me?with_related_data=true", { apiToken });
@@ -420,7 +496,8 @@ async function validateAndSaveSettings(input) {
     syncWorklogs,
     worklogSyncMode,
     worklogRounding,
-    worklogCommentTemplate
+    worklogCommentTemplate,
+    floatingButtonPosition
   };
 
   try {
@@ -548,10 +625,16 @@ async function getPopupState() {
   }
 
   const current = await getCurrentTimeEntry(settings.apiToken);
-  await reconcileStoppedTrackedTimers(settings, current?.id).catch(() => undefined);
+  await serializeExtensionMutation(async () => {
+    const latestSettings = await getSettings();
+    if (latestSettings.apiToken !== settings.apiToken) {
+      return;
+    }
+    await reconcileStoppedTrackedTimers(latestSettings, current?.id);
+  }).catch(() => undefined);
 
   const [workedToday, jira] = await Promise.all([
-    getWorkedTodaySummary(settings.apiToken, current),
+    getWorkedTodaySummary(settings.apiToken, current, undefined, settings),
     getCurrentJiraInsight(current, settings, publicSettings)
   ]);
 
@@ -564,9 +647,9 @@ async function getPopupState() {
   };
 }
 
-async function getTimerStatus(issueInput) {
+async function getTimerStatus(issueInput, settingsInput = null) {
   const issue = normalizeIssue(issueInput);
-  const settings = await getSettings();
+  const settings = settingsInput || await getSettings();
   const description = formatDescription(settings.descriptionTemplate, issue);
   const publicSettings = await getPublicSettings(settings);
 
@@ -583,9 +666,9 @@ async function getTimerStatus(issueInput) {
   };
 }
 
-async function startTimer(issueInput) {
+async function startTimer(issueInput, settingsInput = null) {
   const issue = normalizeIssue(issueInput);
-  const settings = await getConfiguredTogglSettings();
+  const settings = await getConfiguredTogglSettings(settingsInput);
   const description = formatDescription(settings.descriptionTemplate, issue);
   return startDescriptionTimer(description, settings, issue);
 }
@@ -596,10 +679,32 @@ async function startManualTimer(descriptionInput) {
   return startDescriptionTimer(description, settings, null);
 }
 
-async function startDescriptionTimer(description, settings, issue = null) {
+async function startTodayAppointment(sourceEntryIdInput) {
+  const settings = await getConfiguredTogglSettings();
+  const sourceEntryId = normalizeAppointmentSourceId(sourceEntryIdInput);
+  const source = await getTimeEntryById(sourceEntryId, settings.apiToken);
+  validateTodayAppointmentSource(source, sourceEntryId);
+
+  const description = normalizeManualDescription(source.description);
+  const state = await getWorklogState();
+  const issueKey = getAssociatedIssueKey(sourceEntryId, state, settings.jiraOrigin);
+  return startDescriptionTimer(
+    description,
+    settings,
+    issueKey,
+    { forceSwitch: true }
+  );
+}
+
+async function startDescriptionTimer(
+  description,
+  settings,
+  issue = null,
+  { forceSwitch = false } = {}
+) {
   const current = await getCurrentTimeEntry(settings.apiToken);
 
-  if (current && descriptionsMatch(current.description, description)) {
+  if (current && !forceSwitch && descriptionsMatch(current.description, description)) {
     const entry = sanitizeEntry(current);
     if (issue && entry) {
       await trackJiraTimer(entry, issue, description, settings);
@@ -617,7 +722,7 @@ async function startDescriptionTimer(description, settings, issue = null) {
   let stoppedPrevious = false;
   let previousWorklogSync = null;
   if (current) {
-    if (!settings.stopExisting) {
+    if (!forceSwitch && !settings.stopExisting) {
       throw new UserFacingError(
         "CURRENT_TIMER_RUNNING",
         "Another timer is already running. Stop it in Toggl or enable automatic switching in Advanced settings."
@@ -670,9 +775,9 @@ async function startDescriptionTimer(description, settings, issue = null) {
   };
 }
 
-async function stopTimerForIssue(issueInput) {
+async function stopTimerForIssue(issueInput, settingsInput = null) {
   const issue = normalizeIssue(issueInput);
-  const settings = await getTogglAccessSettings();
+  const settings = await getTogglAccessSettings(settingsInput);
   const description = formatDescription(settings.descriptionTemplate, issue);
   const current = await getCurrentTimeEntry(settings.apiToken);
 
@@ -683,7 +788,7 @@ async function stopTimerForIssue(issueInput) {
   if (!descriptionsMatch(current.description, description)) {
     throw new UserFacingError(
       "DIFFERENT_TIMER_RUNNING",
-      "A different timer is running. Use the extension popup to stop it."
+      "A different timer is running. Use the extension side panel to stop it."
     );
   }
 
@@ -716,8 +821,8 @@ async function stopCurrentTimer() {
   };
 }
 
-async function getConfiguredTogglSettings() {
-  const settings = await getSettings();
+async function getConfiguredTogglSettings(settingsInput = null) {
+  const settings = settingsInput || await getSettings();
 
   if (!hasStartConfiguration(settings)) {
     throw new UserFacingError(
@@ -729,8 +834,8 @@ async function getConfiguredTogglSettings() {
   return settings;
 }
 
-async function getTogglAccessSettings() {
-  const settings = await getSettings();
+async function getTogglAccessSettings(settingsInput = null) {
+  const settings = settingsInput || await getSettings();
 
   if (!settings.apiToken) {
     throw new UserFacingError(
@@ -789,21 +894,38 @@ async function getCurrentTimeEntry(apiToken) {
   return current;
 }
 
-async function getWorkedTodaySummary(apiToken, currentEntry, nowInput = new Date()) {
+async function getWorkedTodaySummary(
+  apiToken,
+  currentEntry,
+  nowInput = new Date(),
+  settings = null
+) {
   const interval = getLocalDayInterval(nowInput);
 
   try {
-    const entries = await togglRequest(
-      `/api/v9/me/time_entries?start_date=${encodeURIComponent(interval.queryStart)}&end_date=${encodeURIComponent(interval.end)}`,
-      { apiToken }
-    );
-    return buildWorkedSummary(entries, currentEntry, interval);
+    const worklogStatePromise = settings
+      ? getWorklogState().catch(() => ({ entries: {} }))
+      : Promise.resolve({ entries: {} });
+    const [entries, worklogState] = await Promise.all([
+      togglRequest(
+        `/api/v9/me/time_entries?start_date=${encodeURIComponent(interval.queryStart)}&end_date=${encodeURIComponent(interval.end)}`,
+        { apiToken }
+      ),
+      worklogStatePromise
+    ]);
+    return buildWorkedSummary(entries, currentEntry, interval, worklogState, settings);
   } catch {
     return buildWorkedSummaryError(interval);
   }
 }
 
-function buildWorkedSummary(entries, currentEntry, interval) {
+function buildWorkedSummary(
+  entries,
+  currentEntry,
+  interval,
+  worklogState = { entries: {} },
+  settings = null
+) {
   const timeEntries = Array.isArray(entries) ? entries : [];
   return {
     status: "ok",
@@ -818,7 +940,14 @@ function buildWorkedSummary(entries, currentEntry, interval) {
     weekStart: interval.weekStart,
     runningEntryId: isRunningTimeEntry(currentEntry)
       ? Number(currentEntry.id) || null
-      : null
+      : null,
+    appointments: buildTodayAppointments(
+      timeEntries,
+      currentEntry,
+      interval,
+      worklogState,
+      settings
+    )
   };
 }
 
@@ -831,6 +960,7 @@ function buildWorkedSummaryError(interval) {
     dayStart: interval.start,
     weekStart: interval.weekStart,
     runningEntryId: null,
+    appointments: [],
     message: "Worked totals are temporarily unavailable. Timer controls still work."
   };
 }
@@ -884,40 +1014,121 @@ function calculateDailyWorkedSeconds(
     return 0;
   }
 
-  const byId = new Map();
-  for (const entry of Array.isArray(entries) ? entries : []) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-
-    const key = entry.id === null || entry.id === undefined
-      ? `anonymous:${byId.size}`
-      : String(entry.id);
-    byId.set(key, mergeTimeEntries(byId.get(key), entry));
-  }
-
-  if (currentEntry && typeof currentEntry === "object") {
-    const key = currentEntry.id === null || currentEntry.id === undefined
-      ? "current"
-      : String(currentEntry.id);
-    byId.set(key, mergeTimeEntries(byId.get(key), currentEntry));
-  }
-
   let totalSeconds = 0;
-  for (const entry of byId.values()) {
-    const interval = getTimeEntryInterval(entry, endBoundary);
-    if (!interval) {
-      continue;
-    }
-
-    const clippedStart = Math.max(startBoundary, interval.startMs);
-    const clippedEnd = Math.min(endBoundary, interval.endMs);
-    if (clippedEnd > clippedStart) {
-      totalSeconds += Math.floor((clippedEnd - clippedStart) / 1000);
-    }
+  for (const entry of mergeTimeEntriesById(entries, currentEntry)) {
+    totalSeconds += getClippedEntrySeconds(entry, startBoundary, endBoundary);
   }
 
   return Math.max(0, totalSeconds);
+}
+
+function mergeTimeEntriesById(entries, currentEntry) {
+  const byId = new Map();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    mergeTimeEntryIntoMap(byId, entry);
+  }
+  mergeTimeEntryIntoMap(byId, currentEntry, "current");
+  return [...byId.values()];
+}
+
+function mergeTimeEntryIntoMap(byId, entry, anonymousKey = "") {
+  if (!entry || typeof entry !== "object") {
+    return;
+  }
+  const key = entry.id === null || entry.id === undefined
+    ? anonymousKey || `anonymous:${byId.size}`
+    : String(entry.id);
+  byId.set(key, mergeTimeEntries(byId.get(key), entry));
+}
+
+function getClippedEntrySeconds(entry, startMs, endMs) {
+  return getClippedEntryInterval(entry, startMs, endMs)?.totalSeconds || 0;
+}
+
+function getClippedEntryInterval(entry, startMs, endMs) {
+  const interval = getTimeEntryInterval(entry, endMs);
+  if (!interval) {
+    return null;
+  }
+  const clippedStart = Math.max(startMs, interval.startMs);
+  const clippedEnd = Math.min(endMs, interval.endMs);
+  if (clippedEnd <= clippedStart) {
+    return null;
+  }
+  return {
+    startMs: clippedStart,
+    endMs: clippedEnd,
+    totalSeconds: Math.floor((clippedEnd - clippedStart) / 1000)
+  };
+}
+
+function buildTodayAppointments(entries, currentEntry, interval, state, settings) {
+  const groups = new Map();
+  for (const entry of mergeTimeEntriesById(entries, currentEntry)) {
+    addTodayAppointment(groups, entry, interval, state, settings);
+  }
+  return [...groups.values()]
+    .sort((first, second) =>
+      second.lastWorkedAt - first.lastWorkedAt ||
+      first.description.localeCompare(second.description)
+    )
+    .map(({ lastWorkedAt, ...appointment }) => appointment);
+}
+
+function addTodayAppointment(groups, entry, interval, state, settings) {
+  const identity = getAppointmentIdentity(entry, state, settings?.jiraOrigin);
+  const clipped = getClippedEntryInterval(entry, interval.startMs, interval.endMs);
+  if (!identity || !clipped) {
+    return;
+  }
+
+  const group = groups.get(identity.groupKey) || createAppointmentGroup(identity);
+  group.totalSeconds += clipped.totalSeconds;
+  if (clipped.endMs >= group.lastWorkedAt) {
+    group.description = identity.description;
+    group.sourceEntryId = identity.sourceEntryId;
+    group.lastWorkedAt = clipped.endMs;
+  }
+  if (isRunningTimeEntry(entry)) {
+    group.runningEntryId = identity.sourceEntryId;
+  }
+  groups.set(identity.groupKey, group);
+}
+
+function getAppointmentIdentity(entry, state, jiraOrigin) {
+  const sourceEntryId = Number(entry?.id || 0);
+  const description = normalizeWhitespace(entry?.description || "");
+  if (!isPositiveInteger(sourceEntryId) || !description) {
+    return null;
+  }
+  const issueKey = getAssociatedIssueKey(sourceEntryId, state, jiraOrigin);
+  return {
+    groupKey: issueKey ? `jira:${issueKey}` : `description:${description}`,
+    sourceEntryId,
+    issueKey,
+    description
+  };
+}
+
+function createAppointmentGroup(identity) {
+  return {
+    sourceEntryId: identity.sourceEntryId,
+    issueKey: identity.issueKey,
+    description: identity.description,
+    totalSeconds: 0,
+    runningEntryId: null,
+    lastWorkedAt: -Infinity
+  };
+}
+
+function getAssociatedIssueKey(entryId, state, jiraOrigin) {
+  const record = state?.entries?.[String(entryId)];
+  if (!record || (jiraOrigin && record.jiraOrigin !== jiraOrigin)) {
+    return null;
+  }
+  return isValidJiraIssueKey(record.issueKey)
+    ? String(record.issueKey).trim().toUpperCase()
+    : null;
 }
 
 function getTimeEntryInterval(entry, nowMs) {
@@ -985,7 +1196,7 @@ async function getCurrentJiraInsight(currentEntry, settings, publicSettings) {
   }
 
   try {
-    const fields = JIRA_INSIGHT_FIELDS.join(",");
+    const fields = JIRA_PROGRESS_FIELDS.join(",");
     const result = await jiraRequestWithFallback(settings, (apiVersion) => ({
       path: `/rest/api/${apiVersion}/issue/${encodeURIComponent(association.issueKey)}?fields=${fields}`
     }));
@@ -1003,19 +1214,13 @@ async function getCurrentJiraInsight(currentEntry, settings, publicSettings) {
       1000
     );
     const timeTracking = extractJiraTimeTracking(issueFields);
-    const descriptionMarkdown = adfToMarkdown(issueFields.description);
 
     return {
       status: "ok",
       issueKey,
       detection: association.detection,
       summary,
-      ...timeTracking,
-      clipboardText: buildJiraClipboardDocument({
-        issueKey,
-        summary,
-        descriptionMarkdown
-      })
+      ...timeTracking
     };
   } catch {
     return {
@@ -1025,6 +1230,45 @@ async function getCurrentJiraInsight(currentEntry, settings, publicSettings) {
       message: "Jira progress could not be loaded. You can still stop the timer."
     };
   }
+}
+
+async function getJiraClipboard(issueKeyInput, settingsInput = null) {
+  const issueKey = normalizeJiraIssueKey(issueKeyInput);
+  const settings = settingsInput || await getSettings();
+
+  try {
+    const fields = JIRA_CLIPBOARD_FIELDS.join(",");
+    const result = await jiraRequestWithFallback(settings, (apiVersion) => ({
+      path: `/rest/api/${apiVersion}/issue/${encodeURIComponent(issueKey)}?fields=${fields}`
+    }));
+    return buildJiraClipboardResult(issueKey, result.payload);
+  } catch {
+    throw new UserFacingError(
+      "JIRA_COPY_UNAVAILABLE",
+      "Jira title and description could not be loaded. Check Jira access and try again."
+    );
+  }
+}
+
+function buildJiraClipboardResult(requestedIssueKey, payload) {
+  const fields = payload?.fields && typeof payload.fields === "object"
+    ? payload.fields
+    : {};
+  const issueKey = isValidJiraIssueKey(payload?.key)
+    ? String(payload.key).trim().toUpperCase()
+    : requestedIssueKey;
+  const summary = truncate(
+    normalizeWhitespace(fields.summary || "Untitled Jira issue"),
+    1000
+  );
+  return {
+    issueKey,
+    clipboardText: buildJiraClipboardDocument({
+      issueKey,
+      summary,
+      descriptionMarkdown: adfToMarkdown(fields.description)
+    })
+  };
 }
 
 async function identifyJiraIssueForEntry(entry, settings) {
@@ -1056,6 +1300,18 @@ function extractJiraIssueKey(value) {
 
 function isValidJiraIssueKey(value) {
   return /^[A-Z][A-Z0-9_]*-\d+$/.test(String(value || "").trim().toUpperCase());
+}
+
+function normalizeJiraIssueKey(value) {
+  const candidate = typeof value === "object" ? value?.key : value;
+  const issueKey = String(candidate || "").trim().toUpperCase();
+  if (!isValidJiraIssueKey(issueKey)) {
+    throw new UserFacingError(
+      "INVALID_ISSUE_KEY",
+      "Could not identify a valid Jira issue key."
+    );
+  }
+  return issueKey;
 }
 
 function extractJiraTimeTracking(fields) {
@@ -1384,7 +1640,7 @@ async function trackJiraTimer(entry, issue, description, settings) {
     return;
   }
 
-  const normalizedIssue = normalizeIssue(issue);
+  const issueKey = normalizeJiraIssueKey(issue);
   const now = new Date().toISOString();
   const state = await getWorklogState();
   const existing = state.entries[String(togglEntryId)] || {};
@@ -1393,7 +1649,7 @@ async function trackJiraTimer(entry, issue, description, settings) {
     togglEntryId,
     workspaceId: entry.workspaceId || settings.workspaceId,
     jiraOrigin: settings.jiraOrigin,
-    issueKey: normalizedIssue.key,
+    issueKey,
     description,
     started: entry.start || existing.started || now,
     stopped: null,
@@ -1481,7 +1737,8 @@ async function finalizeTrackedTimer(entry, settings, fallbackIssue = null) {
   state.entries[String(togglEntryId)] = record;
 
   if (!settings.syncWorklogs) {
-    delete state.entries[String(togglEntryId)];
+    record.status = "completed";
+    state.entries[String(togglEntryId)] = record;
     await saveWorklogState(state);
     return {
       status: "disabled",
@@ -1661,7 +1918,7 @@ async function reconcileStoppedTrackedTimers(settings, currentEntryId = null) {
         await finalizeTrackedTimer(entry, settings);
       }
     } catch {
-      // The pending record remains available for a later popup refresh or manual retry.
+      // The pending record remains available for a later side-panel refresh or manual retry.
     }
   }
 }
@@ -1708,9 +1965,13 @@ async function saveWorklogState(state) {
     .filter((record) => record && Number(record.togglEntryId) > 0)
     .sort((first, second) => String(second.updatedAt).localeCompare(String(first.updatedAt)));
 
-  const protectedRecords = entries.filter((record) => record.status !== "synced");
-  const syncedRecords = entries.filter((record) => record.status === "synced");
-  const keep = [...protectedRecords, ...syncedRecords]
+  const protectedRecords = entries.filter((record) =>
+    ["running", "pending"].includes(record.status)
+  );
+  const terminalRecords = entries.filter((record) =>
+    !["running", "pending"].includes(record.status)
+  );
+  const keep = [...protectedRecords, ...terminalRecords]
     .slice(0, Math.max(MAX_WORKLOG_RECORDS, protectedRecords.length));
   const normalizedEntries = Object.fromEntries(
     keep.map((record) => [String(record.togglEntryId), record])
@@ -2024,6 +2285,36 @@ async function getTimeEntryById(timeEntryId, apiToken) {
     apiToken,
     notFoundAsNull: true
   });
+}
+
+function normalizeAppointmentSourceId(value) {
+  const sourceEntryId = normalizeOptionalPositiveInteger(
+    value,
+    "Appointment source time-entry ID"
+  );
+  if (!sourceEntryId) {
+    throw new UserFacingError(
+      "INVALID_APPOINTMENT_SOURCE",
+      "The appointment source time-entry ID must be a positive integer."
+    );
+  }
+  return sourceEntryId;
+}
+
+function validateTodayAppointmentSource(entry, sourceEntryId) {
+  if (!entry || Number(entry.id) !== sourceEntryId) {
+    throw new UserFacingError(
+      "APPOINTMENT_UNAVAILABLE",
+      "The selected appointment is no longer available in Toggl."
+    );
+  }
+  const interval = getLocalDayInterval(new Date());
+  if (!getClippedEntryInterval(entry, interval.startMs, interval.endMs)) {
+    throw new UserFacingError(
+      "APPOINTMENT_NOT_TODAY",
+      "The selected appointment is not part of today anymore."
+    );
+  }
 }
 
 function worklogResultFromRecord(record, { existing = false } = {}) {
@@ -2363,6 +2654,27 @@ function coerceWorklogCommentTemplate(value) {
     return normalizeWorklogCommentTemplate(value);
   } catch {
     return DEFAULT_SETTINGS.worklogCommentTemplate;
+  }
+}
+
+function normalizeFloatingButtonPosition(value) {
+  const position = String(
+    value || DEFAULT_SETTINGS.floatingButtonPosition
+  ).trim();
+  if (!FLOATING_BUTTON_POSITION_SET.has(position)) {
+    throw new UserFacingError(
+      "INVALID_FLOATING_BUTTON_POSITION",
+      "Choose a valid floating button position."
+    );
+  }
+  return position;
+}
+
+function coerceFloatingButtonPosition(value) {
+  try {
+    return normalizeFloatingButtonPosition(value);
+  } catch {
+    return DEFAULT_SETTINGS.floatingButtonPosition;
   }
 }
 

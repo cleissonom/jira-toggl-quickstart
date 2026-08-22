@@ -57,6 +57,8 @@ function createHarness({
   const fetchQueue = [];
   const requests = [];
   const actionIconUpdates = [];
+  const sidePanelBehaviors = [];
+  const runtimeMessages = [];
   const listeners = {};
   let optionsOpenCount = 0;
   let accessLevel = null;
@@ -65,6 +67,11 @@ function createHarness({
     action: {
       async setIcon({ path: iconPath }) {
         actionIconUpdates.push(structuredClone(iconPath));
+      }
+    },
+    sidePanel: {
+      async setPanelBehavior(behavior) {
+        sidePanelBehaviors.push(structuredClone(behavior));
       }
     },
     storage: {
@@ -106,6 +113,9 @@ function createHarness({
         addListener(listener) {
           listeners.message = listener;
         }
+      },
+      async sendMessage(message) {
+        runtimeMessages.push(structuredClone(message));
       },
       async openOptionsPage() {
         optionsOpenCount += 1;
@@ -205,6 +215,8 @@ function createHarness({
     fetchQueue,
     requests,
     actionIconUpdates,
+    sidePanelBehaviors,
+    runtimeMessages,
     listeners,
     get optionsOpenCount() {
       return optionsOpenCount;
@@ -220,7 +232,7 @@ function createHarness({
         tab: { url }
       };
     },
-    extensionSender(page = "popup.html") {
+    extensionSender(page = "sidepanel.html") {
       return {
         id: EXTENSION_ID,
         url: `chrome-extension://${EXTENSION_ID}/${page}`
@@ -228,6 +240,15 @@ function createHarness({
     }
   };
 }
+
+test("configures the toolbar action to toggle the side panel", async () => {
+  const harness = createHarness();
+  await Promise.resolve();
+
+  assert.deepEqual(harness.sidePanelBehaviors, [
+    { openPanelOnActionClick: true }
+  ]);
+});
 
 function configuredSettings(overrides = {}) {
   return {
@@ -245,6 +266,7 @@ function configuredSettings(overrides = {}) {
     worklogSyncMode: "automatic",
     worklogRounding: "nearest-minute",
     worklogCommentTemplate: "Synced from Toggl: {description}",
+    floatingButtonPosition: "bottom-right",
     ...overrides
   };
 }
@@ -359,6 +381,7 @@ test("starts a Jira timer with the default description and selected billing valu
   assert.equal(tracked.issueKey, "PROJ-123");
   assert.equal(tracked.status, "running");
   assert.equal(tracked.description, "[PROJ-123] Improve the onboarding workflow");
+  assert.deepEqual(harness.runtimeMessages, [{ type: "SIDE_PANEL_STATE_CHANGED" }]);
 });
 
 test("renders all supported Jira template variables", () => {
@@ -477,6 +500,175 @@ test("stops an existing timer before starting a different manual timer", async (
     "https://api.track.toggl.com/api/v9/workspaces/123/time_entries/8000/stop"
   );
   assert.equal(harness.requests[2].method, "POST");
+});
+
+test("serializes concurrent timer mutations so only one Toggl timer survives", async () => {
+  const harness = createHarness({ initialSettings: configuredSettings() });
+  let current = null;
+  let nextId = 9300;
+  const respondFromTogglState = (url, options = {}) => {
+    const method = options.method || "GET";
+    if (String(url).endsWith("/me/time_entries/current")) {
+      return jsonResponse(current);
+    }
+    if (method === "PATCH") {
+      const stopped = { ...current, stop: new Date().toISOString(), duration: 1 };
+      current = null;
+      return jsonResponse(stopped);
+    }
+    if (method === "POST") {
+      current = { id: nextId++, ...JSON.parse(options.body) };
+      return jsonResponse(current);
+    }
+    throw new Error(`Unexpected request: ${method} ${url}`);
+  };
+  harness.fetchQueue.push(...Array(8).fill(respondFromTogglState));
+
+  const [first, second] = await Promise.all([
+    harness.context.handleMessage(
+      { type: "START_MANUAL_TIMER", description: "First concurrent task" },
+      harness.extensionSender("popup.html")
+    ),
+    harness.context.handleMessage(
+      { type: "START_MANUAL_TIMER", description: "Second concurrent task" },
+      harness.extensionSender("popup.html")
+    )
+  ]);
+
+  assert.equal(first.action, "started");
+  assert.equal(second.action, "started");
+  assert.equal(second.stoppedPrevious, true);
+  assert.equal(current.description, "Second concurrent task");
+  assert.deepEqual(harness.requests.map((request) => request.method), [
+    "GET", "POST", "GET", "PATCH", "POST"
+  ]);
+});
+
+test("does not recreate timer state after settings are cleared", async () => {
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
+  let releaseCurrentLookup;
+  const blockedCurrentLookup = new Promise((resolve) => {
+    releaseCurrentLookup = () => resolve(jsonResponse(null));
+  });
+  const manualEntry = {
+    id: 9400,
+    workspace_id: 123,
+    description: "Blocking manual task",
+    start: "2026-08-20T10:00:00Z",
+    duration: -1
+  };
+  harness.fetchQueue.push(
+    () => blockedCurrentLookup,
+    jsonResponse(manualEntry),
+    jsonResponse(manualEntry),
+    jsonResponse({ ...manualEntry, stop: "2026-08-20T10:30:00Z", duration: 1800 }),
+    jsonResponse({
+      id: 9401,
+      workspace_id: 123,
+      description: "[PROJ-123] Improve the onboarding workflow",
+      start: "2026-08-20T10:30:00Z",
+      duration: -1
+    })
+  );
+
+  const manualStart = harness.context.handleMessage(
+    { type: "START_MANUAL_TIMER", description: "Blocking manual task" },
+    harness.extensionSender("popup.html")
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const jiraStart = harness.context.handleMessage(
+    { type: "START_TIMER", issue: ISSUE },
+    harness.jiraSender()
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const clear = harness.context.handleMessage(
+    { type: "CLEAR_SETTINGS" },
+    harness.extensionSender("options.html")
+  );
+  await Promise.race([
+    clear,
+    new Promise((resolve) => setImmediate(resolve))
+  ]);
+  releaseCurrentLookup();
+  await Promise.all([manualStart, jiraStart, clear]);
+
+  assert.equal(harness.storage[STORAGE_KEY], undefined);
+  assert.equal(harness.storage[WORKLOG_STATE_KEY], undefined);
+});
+
+test("notifies the side panel when switching stops the timer but restart fails", async () => {
+  const harness = createHarness({
+    initialSettings: configuredSettings(),
+    permissions: [JIRA_MATCH]
+  });
+  harness.fetchQueue.push(
+    jsonResponse({
+      id: 9500,
+      workspace_id: 123,
+      description: "Previous task",
+      start: "2026-08-20T10:00:00Z",
+      duration: -1
+    }),
+    jsonResponse({
+      id: 9500,
+      workspace_id: 123,
+      description: "Previous task",
+      start: "2026-08-20T10:00:00Z",
+      stop: "2026-08-20T10:30:00Z",
+      duration: 1800
+    }),
+    jsonResponse({ message: "Toggl create failed" }, 500)
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "START_TIMER", issue: ISSUE },
+      harness.jiraSender()
+    )
+  );
+
+  assert.deepEqual(harness.requests.map((request) => request.method), [
+    "GET", "PATCH", "POST"
+  ]);
+  assert.deepEqual(harness.runtimeMessages, [
+    { type: "SIDE_PANEL_STATE_CHANGED" }
+  ]);
+});
+
+test("refreshes the side panel after a failed manual timer switch", async () => {
+  const harness = createHarness({ initialSettings: configuredSettings() });
+  harness.fetchQueue.push(
+    jsonResponse({
+      id: 9501,
+      workspace_id: 123,
+      description: "Previous task",
+      start: "2026-08-20T10:00:00Z",
+      duration: -1
+    }),
+    jsonResponse({
+      id: 9501,
+      workspace_id: 123,
+      description: "Previous task",
+      start: "2026-08-20T10:00:00Z",
+      stop: "2026-08-20T10:30:00Z",
+      duration: 1800
+    }),
+    jsonResponse({ message: "Toggl create failed" }, 500)
+  );
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "START_MANUAL_TIMER", description: "Replacement task" },
+      harness.extensionSender("popup.html")
+    )
+  );
+
+  assert.deepEqual(harness.runtimeMessages, [
+    { type: "SIDE_PANEL_STATE_CHANGED" }
+  ]);
 });
 
 test("rejects unknown description variables before calling Toggl", async () => {
@@ -898,6 +1090,26 @@ test("reconciles a Jira timer stopped outside the extension when the popup opens
     harness.requests.some((request) =>
       request.url === "https://api.track.toggl.com/api/v9/me/time_entries/9700"
     )
+  );
+});
+
+test("returns only validated Jira UI settings to the configured Jira origin", async () => {
+  const harness = createHarness({
+    initialSettings: configuredSettings({ floatingButtonPosition: "top-left" })
+  });
+
+  const result = await harness.context.handleMessage(
+    { type: "GET_JIRA_UI_SETTINGS" },
+    harness.jiraSender()
+  );
+  assert.deepEqual({ ...result }, { floatingButtonPosition: "top-left" });
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "GET_JIRA_UI_SETTINGS" },
+      harness.jiraSender("https://attacker.example")
+    ),
+    /authorized Jira site/i
   );
 });
 
@@ -1442,6 +1654,392 @@ test("queries a one-day lookback once and clips daily and Monday-week totals", a
   assert.equal(nextMonday.weekStart, new Date(2026, 7, 24).toISOString());
 });
 
+test("keeps Toggl totals available when local Jira associations cannot be read", async () => {
+  const harness = createHarness();
+  const now = new Date(2026, 7, 20, 12, 0, 0);
+  const originalGet = harness.context.chrome.storage.local.get;
+  harness.context.chrome.storage.local.get = async (key) => {
+    if (key === WORKLOG_STATE_KEY) {
+      throw new Error("Local association state unavailable");
+    }
+    return originalGet(key);
+  };
+  harness.fetchQueue.push(jsonResponse([{
+    id: 1,
+    description: "Available Toggl work",
+    start: new Date(2026, 7, 20, 11, 0, 0).toISOString(),
+    stop: now.toISOString(),
+    duration: 3600
+  }]));
+
+  const summary = await harness.context.getWorkedTodaySummary(
+    "test-token",
+    null,
+    now,
+    configuredSettings()
+  );
+
+  assert.equal(summary.status, "ok");
+  assert.equal(summary.totalSeconds, 3600);
+  assert.equal(summary.appointments[0].description, "Available Toggl work");
+  assert.equal(summary.appointments[0].issueKey, null);
+});
+
+test("groups today's Jira and manual appointments from the existing history response", () => {
+  const harness = createHarness();
+  const now = new Date(2026, 7, 20, 12, 0, 0);
+  const interval = harness.context.getLocalDayInterval(now);
+  const at = (day, hour, minute = 0) =>
+    new Date(2026, 7, day, hour, minute, 0).toISOString();
+  const running = {
+    id: 106,
+    description: "Customer onboarding",
+    start: at(20, 11, 30),
+    duration: -1
+  };
+  const entries = [
+    { id: 100, description: "Old title", start: at(20, 8), stop: at(20, 9), duration: 3600 },
+    { id: 101, description: "Customer onboarding", start: at(20, 10), stop: at(20, 10, 30), duration: 1800 },
+    { id: 102, description: " Review docs ", start: at(20, 9), duration: 1200 },
+    { id: 103, description: "Review   docs", start: at(20, 11), duration: 600 },
+    { id: 104, description: "[OPS-9] Manually typed", start: at(20, 7), duration: 900 },
+    { id: 105, description: "Crossing midnight", start: at(19, 23, 30), stop: at(20, 0, 30), duration: 3600 },
+    running
+  ];
+  const state = {
+    entries: Object.fromEntries([100, 101, 105, 106].map((id) => [String(id), {
+      togglEntryId: id,
+      jiraOrigin: JIRA_ORIGIN,
+      issueKey: id === 105 ? "PROJ-9" : "PROJ-123"
+    }]))
+  };
+
+  const summary = harness.context.buildWorkedSummary(
+    entries,
+    running,
+    interval,
+    state,
+    configuredSettings()
+  );
+
+  assert.equal(summary.totalSeconds, 11700);
+  assert.deepEqual(
+    Array.from(summary.appointments, (item) => item.issueKey),
+    ["PROJ-123", null, null, "PROJ-9"]
+  );
+  assert.deepEqual(
+    Array.from(summary.appointments, (item) => item.description),
+    ["Customer onboarding", "Review docs", "[OPS-9] Manually typed", "Crossing midnight"]
+  );
+  assert.deepEqual(
+    Array.from(summary.appointments, (item) => item.totalSeconds),
+    [7200, 1800, 900, 1800]
+  );
+  assert.equal(summary.appointments[0].sourceEntryId, 106);
+  assert.equal(summary.appointments[0].runningEntryId, 106);
+  assert.equal(summary.appointments[1].sourceEntryId, 103);
+  assert.equal(summary.appointments[2].issueKey, null, "description keys must not create Jira provenance");
+});
+
+test("retains capped Jira provenance when Work Log sync is disabled", async () => {
+  const harness = createHarness({
+    initialWorklogState: {
+      version: 1,
+      entries: {
+        "7001": {
+          togglEntryId: 7001,
+          workspaceId: 123,
+          jiraOrigin: JIRA_ORIGIN,
+          issueKey: "PROJ-123",
+          description: "Custom description without a key",
+          started: "2026-08-20T10:00:00Z",
+          status: "running",
+          createdAt: "2026-08-20T10:00:00Z",
+          updatedAt: "2026-08-20T10:00:00Z"
+        }
+      }
+    }
+  });
+
+  const result = await harness.context.finalizeTrackedTimer({
+    id: 7001,
+    workspace_id: 123,
+    description: "Custom description without a key",
+    start: "2026-08-20T10:00:00Z",
+    stop: "2026-08-20T10:30:00Z",
+    duration: 1800
+  }, configuredSettings({ syncWorklogs: false }));
+
+  assert.equal(result.status, "disabled");
+  assert.equal(harness.storage[WORKLOG_STATE_KEY].entries["7001"].status, "completed");
+  assert.equal(harness.storage[WORKLOG_STATE_KEY].entries["7001"].issueKey, "PROJ-123");
+});
+
+test("caps terminal Jira provenance while retaining active Work Log records", async () => {
+  const harness = createHarness();
+  const entries = Object.fromEntries(Array.from({ length: 205 }, (_, index) => {
+    const togglEntryId = 8000 + index;
+    const updatedAt = new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
+    return [String(togglEntryId), {
+      togglEntryId,
+      status: "completed",
+      updatedAt
+    }];
+  }));
+  entries["9001"] = {
+    togglEntryId: 9001,
+    status: "running",
+    updatedAt: "2025-01-01T00:00:00.000Z"
+  };
+  entries["9002"] = {
+    togglEntryId: 9002,
+    status: "pending",
+    updatedAt: "2025-01-01T00:00:00.000Z"
+  };
+
+  await harness.context.saveWorklogState({ entries });
+
+  const saved = harness.storage[WORKLOG_STATE_KEY].entries;
+  assert.equal(Object.keys(saved).length, 200);
+  assert.ok(saved["9001"]);
+  assert.ok(saved["9002"]);
+  assert.equal(saved["8000"], undefined);
+  assert.ok(saved["8007"]);
+  assert.ok(saved["8204"]);
+});
+
+test("replays a today's appointment by stopping the current timer even when switching is disabled", async () => {
+  const now = Date.now();
+  const source = {
+    id: 7101,
+    workspace_id: 123,
+    description: "Review pull request",
+    start: new Date(now - 3_600_000).toISOString(),
+    stop: new Date(now - 1_800_000).toISOString(),
+    duration: 1800
+  };
+  const current = {
+    id: 7102,
+    workspace_id: 123,
+    description: "Current task",
+    start: new Date(now - 900_000).toISOString(),
+    duration: -1
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings({ stopExisting: false })
+  });
+  harness.fetchQueue.push(
+    jsonResponse(source),
+    jsonResponse(current),
+    jsonResponse({ ...current, stop: new Date().toISOString(), duration: 900 }),
+    jsonResponse({ id: 7103, workspace_id: 123, description: source.description, duration: -1 })
+  );
+
+  const result = await harness.context.handleMessage(
+    { type: "START_TODAY_APPOINTMENT", sourceEntryId: source.id },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(result.action, "started");
+  assert.equal(result.stoppedPrevious, true);
+  assert.deepEqual(harness.requests.map((request) => request.method), ["GET", "GET", "PATCH", "POST"]);
+  assert.match(harness.requests[0].url, /\/me\/time_entries\/7101$/);
+  assert.match(harness.requests[2].url, /\/time_entries\/7102\/stop$/);
+  assert.equal(JSON.parse(harness.requests[3].body).description, source.description);
+});
+
+test("replay still logs and replaces a different Jira timer with the same description", async () => {
+  const now = Date.now();
+  const source = {
+    id: 7151,
+    workspace_id: 123,
+    description: "Shared timer description",
+    start: new Date(now - 3_600_000).toISOString(),
+    stop: new Date(now - 1_800_000).toISOString(),
+    duration: 1800
+  };
+  const current = {
+    id: 7152,
+    workspace_id: 123,
+    description: source.description,
+    start: new Date(now - 600_000).toISOString(),
+    duration: -1
+  };
+  const worklogState = {
+    version: 1,
+    entries: {
+      "7151": {
+        togglEntryId: 7151,
+        workspaceId: 123,
+        jiraOrigin: JIRA_ORIGIN,
+        issueKey: "PROJ-123",
+        description: source.description,
+        status: "completed",
+        updatedAt: source.stop
+      },
+      "7152": {
+        togglEntryId: 7152,
+        workspaceId: 123,
+        jiraOrigin: JIRA_ORIGIN,
+        issueKey: "OTHER-7",
+        description: current.description,
+        started: current.start,
+        status: "running",
+        updatedAt: current.start
+      }
+    }
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings({ syncWorklogs: true }),
+    initialWorklogState: worklogState
+  });
+  harness.fetchQueue.push(
+    jsonResponse(source),
+    jsonResponse(current),
+    jsonResponse({ ...current, stop: new Date().toISOString(), duration: 600 }),
+    jsonResponse({ worklogs: [], total: 0 }),
+    jsonResponse({ id: "other-worklog", timeSpentSeconds: 600 }),
+    jsonResponse({ id: 7153, workspace_id: 123, description: source.description, duration: -1 })
+  );
+
+  const result = await harness.context.handleMessage(
+    { type: "START_TODAY_APPOINTMENT", sourceEntryId: source.id },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(result.action, "started");
+  assert.equal(result.previousWorklogSync.issueKey, "OTHER-7");
+  assert.equal(harness.storage[WORKLOG_STATE_KEY].entries["7152"].status, "synced");
+  assert.equal(harness.storage[WORKLOG_STATE_KEY].entries["7153"].issueKey, "PROJ-123");
+  assert.deepEqual(harness.requests.map((request) => request.method), [
+    "GET", "GET", "PATCH", "GET", "POST", "POST"
+  ]);
+});
+
+test("replayed Jira appointments keep their issue association for the next Work Log", async () => {
+  const now = Date.now();
+  const source = {
+    id: 7201,
+    workspace_id: 123,
+    description: "Custom Jira timer description",
+    start: new Date(now - 3_600_000).toISOString(),
+    stop: new Date(now - 1_800_000).toISOString(),
+    duration: 1800
+  };
+  const created = {
+    id: 7202,
+    workspace_id: 123,
+    description: source.description,
+    start: new Date().toISOString(),
+    duration: -1
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings({ syncWorklogs: true }),
+    initialWorklogState: {
+      version: 1,
+      entries: {
+        "7201": {
+          togglEntryId: 7201,
+          workspaceId: 123,
+          jiraOrigin: JIRA_ORIGIN,
+          issueKey: "PROJ-123",
+          description: source.description,
+          status: "synced",
+          worklogId: "old-worklog",
+          updatedAt: source.stop
+        }
+      }
+    }
+  });
+  harness.fetchQueue.push(jsonResponse(source), jsonResponse(null), jsonResponse(created));
+
+  await harness.context.handleMessage(
+    { type: "START_TODAY_APPOINTMENT", sourceEntryId: source.id },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(harness.storage[WORKLOG_STATE_KEY].entries["7202"].issueKey, "PROJ-123");
+  assert.equal(harness.storage[WORKLOG_STATE_KEY].entries["7202"].status, "running");
+
+  harness.fetchQueue.push(
+    jsonResponse(created),
+    jsonResponse({ ...created, stop: new Date().toISOString(), duration: 120 }),
+    jsonResponse({ worklogs: [], total: 0 }),
+    jsonResponse({ id: "new-worklog", timeSpentSeconds: 120 })
+  );
+  const stopped = await harness.context.handleMessage(
+    { type: "STOP_CURRENT_TIMER" },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(stopped.worklogSync.status, "synced");
+  assert.equal(stopped.worklogSync.issueKey, "PROJ-123");
+  assert.equal(harness.storage[WORKLOG_STATE_KEY].entries["7202"].status, "synced");
+});
+
+test("Jira-looking manual appointments remain Toggl-only when replayed", async () => {
+  const now = Date.now();
+  const source = {
+    id: 7301,
+    workspace_id: 123,
+    description: "[OPS-9] Manually typed",
+    start: new Date(now - 3_600_000).toISOString(),
+    stop: new Date(now - 1_800_000).toISOString(),
+    duration: 1800
+  };
+  const harness = createHarness({
+    initialSettings: configuredSettings({ syncWorklogs: true })
+  });
+  harness.fetchQueue.push(
+    jsonResponse(source),
+    jsonResponse(null),
+    jsonResponse({ id: 7302, workspace_id: 123, description: source.description, duration: -1 })
+  );
+
+  await harness.context.handleMessage(
+    { type: "START_TODAY_APPOINTMENT", sourceEntryId: source.id },
+    harness.extensionSender("popup.html")
+  );
+
+  assert.equal(Object.hasOwn(harness.storage, WORKLOG_STATE_KEY), false);
+});
+
+test("appointment replay rejects untrusted, invalid, and stale selections before stopping a timer", async () => {
+  const harness = createHarness({ initialSettings: configuredSettings() });
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "START_TODAY_APPOINTMENT", sourceEntryId: 1 },
+      harness.jiraSender()
+    ),
+    /unauthorized source/i
+  );
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "START_TODAY_APPOINTMENT", sourceEntryId: "invalid" },
+      harness.extensionSender("popup.html")
+    ),
+    /positive integer/i
+  );
+
+  harness.fetchQueue.push(jsonResponse({
+    id: 7401,
+    workspace_id: 123,
+    description: "Old appointment",
+    start: "2020-01-01T10:00:00Z",
+    stop: "2020-01-01T11:00:00Z",
+    duration: 3600
+  }));
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "START_TODAY_APPOINTMENT", sourceEntryId: 7401 },
+      harness.extensionSender("popup.html")
+    ),
+    /today/i
+  );
+  assert.equal(harness.requests.length, 1);
+});
+
 test("switches to the running icon on start and restores the default on stop", async () => {
   const running = {
     id: 12000,
@@ -1634,6 +2232,79 @@ test("detects the current Jira issue from the stored Toggl association first", a
   assert.equal(result.jira.loggedSeconds, 19800);
   assert.equal(result.jira.originalEstimateSeconds, 28800);
   assert.equal(result.jira.remainingEstimateSeconds, 9000);
+  assert.equal(Object.hasOwn(result.jira, "clipboardText"), false);
+  const jiraRequest = harness.requests.find((request) => request.url.includes("/rest/api/"));
+  assert.doesNotMatch(new URL(jiraRequest.url).searchParams.get("fields"), /description/);
+});
+
+test("prepares Jira clipboard text only for the authorized Jira page", async () => {
+  const harness = createHarness({ initialSettings: configuredSettings() });
+  harness.fetchQueue.push(jsonResponse({
+    key: "PROJ-123",
+    fields: {
+      summary: "Improve onboarding",
+      description: {
+        type: "doc",
+        version: 1,
+        content: [{ type: "paragraph", content: [{ type: "text", text: "Ship it" }] }]
+      }
+    }
+  }));
+
+  const result = await harness.context.handleMessage(
+    { type: "GET_JIRA_CLIPBOARD", issueKey: "proj-123" },
+    harness.jiraSender()
+  );
+
+  assert.equal(result.issueKey, "PROJ-123");
+  assert.equal(
+    result.clipboardText,
+    "Title:\n```text\n[PROJ-123] Improve onboarding\n```\n\nDescription:\n```md\nShip it\n```"
+  );
+  const url = new URL(harness.requests[0].url);
+  assert.equal(url.searchParams.get("fields"), "summary,description");
+
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "GET_JIRA_CLIPBOARD", issueKey: "PROJ-123" },
+      harness.extensionSender("popup.html")
+    ),
+    /authorized Jira site/i
+  );
+  await assert.rejects(
+    harness.context.handleMessage(
+      { type: "GET_JIRA_CLIPBOARD", issueKey: "not-a-key" },
+      harness.jiraSender()
+    ),
+    /issue key/i
+  );
+  assert.equal(harness.requests.length, 1);
+});
+
+test("uses the authorized Jira settings snapshot for clipboard requests", async () => {
+  const harness = createHarness({ initialSettings: configuredSettings() });
+  const originalGet = harness.context.chrome.storage.local.get;
+  let settingsReads = 0;
+  harness.context.chrome.storage.local.get = async (key) => {
+    const value = await originalGet(key);
+    if (key === STORAGE_KEY && settingsReads++ === 0) {
+      harness.storage[STORAGE_KEY] = configuredSettings({
+        jiraOrigin: "https://other-example.atlassian.net"
+      });
+    }
+    return value;
+  };
+  harness.fetchQueue.push(jsonResponse({
+    key: "PROJ-123",
+    fields: { summary: "Authorized issue", description: null }
+  }));
+
+  await harness.context.handleMessage(
+    { type: "GET_JIRA_CLIPBOARD", issueKey: "PROJ-123" },
+    harness.jiraSender()
+  );
+
+  assert.equal(new URL(harness.requests[0].url).origin, JIRA_ORIGIN);
 });
 
 test("falls back to a conservative Jira key parsed from the Toggl description", async () => {

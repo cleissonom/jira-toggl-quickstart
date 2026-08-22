@@ -32,7 +32,7 @@
         <small id="worked-today-message" class="hidden"></small>
       </section>
 
-      <section id="timer" class="timer hidden" aria-live="polite">
+      <section id="timer" class="timer hidden">
         <div class="timer-heading">
           <span class="kicker">Current timer</span>
           <span id="billing" class="billing hidden"></span>
@@ -69,10 +69,19 @@
         </div>
         <p id="jira-progress-summary" class="jira-progress-summary"></p>
         <p id="jira-progress-detail" class="jira-progress-detail"></p>
-        <button id="copy-jira" class="secondary copy-jira hidden" type="button">
-          Copy Jira title &amp; description
-        </button>
-        <p id="copy-status" class="copy-status hidden" role="status" aria-live="polite"></p>
+      </section>
+
+      <section
+        id="today-appointments"
+        class="appointments hidden"
+        aria-labelledby="appointments-title"
+      >
+        <div class="appointments-heading">
+          <span id="appointments-title" class="kicker">Today's appointments</span>
+          <span id="appointments-count" class="appointments-count"></span>
+        </div>
+        <p id="appointments-empty" class="appointments-empty hidden">No named entries yet today.</p>
+        <ul id="appointments-list"></ul>
       </section>
 
       <button id="stop" class="danger full-width hidden" type="button">Stop timer</button>

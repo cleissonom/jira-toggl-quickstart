@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Jira → Toggl Quick Start",
-  "version": "0.6.0",
-  "description": "Start Toggl timers from Jira with daily and weekly totals, Jira progress, and optional Work Log sync.",
-  "minimum_chrome_version": "102",
+  "version": "0.7.0",
+  "description": "Start and replay Toggl work from Jira with today's entries, flexible controls, and optional Work Log sync.",
+  "minimum_chrome_version": "114",
   "permissions": [
     "scripting",
+    "sidePanel",
     "storage"
   ],
   "host_permissions": [
@@ -18,14 +19,16 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Jira → Toggl",
-    "default_popup": "popup.html",
+    "default_title": "Open Jira → Toggl side panel",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
+  },
+  "side_panel": {
+    "default_path": "popup.html"
   },
   "options_ui": {
     "page": "options.html",

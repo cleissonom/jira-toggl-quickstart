@@ -35,6 +35,9 @@ function createHarness({ initialSettings = null, permissions = [JIRA_MATCH] } = 
     action: {
       async setIcon() {}
     },
+    sidePanel: {
+      async setPanelBehavior() {}
+    },
     storage: {
       local: {
         async setAccessLevel() {},
@@ -61,6 +64,7 @@ function createHarness({ initialSettings = null, permissions = [JIRA_MATCH] } = 
       onInstalled: { addListener(listener) { listeners.installed = listener; } },
       onStartup: { addListener(listener) { listeners.startup = listener; } },
       onMessage: { addListener(listener) { listeners.message = listener; } },
+      async sendMessage() {},
       async openOptionsPage() {}
     },
     permissions: {
@@ -148,6 +152,7 @@ function settingsInput(overrides = {}) {
     worklogSyncMode: "automatic",
     worklogRounding: "nearest-minute",
     worklogCommentTemplate: "Synced from Toggl: {description}",
+    floatingButtonPosition: "bottom-right",
     ...overrides
   };
 }
@@ -168,6 +173,7 @@ function savedSettings(overrides = {}) {
     worklogSyncMode: "automatic",
     worklogRounding: "nearest-minute",
     worklogCommentTemplate: "Synced from Toggl: {description}",
+    floatingButtonPosition: "bottom-right",
     ...overrides
   };
 }
@@ -302,6 +308,36 @@ test("a token and workspace are sufficient start configuration", () => {
   assert.equal(publicSettings.configurationRequired, "");
 });
 
+test("floating button position defaults safely and round-trips through settings", async () => {
+  const legacyHarness = createHarness({
+    initialSettings: savedSettings({ floatingButtonPosition: undefined })
+  });
+  const legacy = await legacyHarness.context.getSettings();
+  assert.equal(legacy.floatingButtonPosition, "bottom-right");
+
+  const invalidHarness = createHarness({
+    initialSettings: savedSettings({ floatingButtonPosition: "middle" })
+  });
+  const invalid = await invalidHarness.context.getSettings();
+  assert.equal(invalid.floatingButtonPosition, "bottom-right");
+  assert.throws(
+    () => invalidHarness.context.normalizeFloatingButtonPosition("middle"),
+    /floating button position/i
+  );
+
+  const saveHarness = createHarness();
+  saveHarness.fetchQueue.push(
+    jsonResponse({ default_workspace_id: 123 }),
+    jsonResponse({ id: 123, name: "Workspace QA" }),
+    jsonResponse(null)
+  );
+  const saved = await saveHarness.context.validateAndSaveSettings(
+    settingsInput({ floatingButtonPosition: "top-left" })
+  );
+  assert.equal(saved.floatingButtonPosition, "top-left");
+  assert.equal(saveHarness.storage[STORAGE_KEY].floatingButtonPosition, "top-left");
+});
+
 test("legacy exact-second rounding migrates to nearest minute", async () => {
   const harness = createHarness({
     initialSettings: savedSettings({ worklogRounding: "exact" })
@@ -368,9 +404,9 @@ test("version 0.5.1 remains documented as a historical release", () => {
   assert.match(fs.readFileSync(path.join(ROOT, "CHANGELOG.md"), "utf8"), /## 0\.5\.1 — 2026-08-20/);
 });
 
-test("permissions and remote-code policy remain unchanged", () => {
+test("side panel is the only new required permission and remote-code policy stays unchanged", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"));
-  assert.deepEqual([...manifest.permissions].sort(), ["scripting", "storage"]);
+  assert.deepEqual([...manifest.permissions].sort(), ["scripting", "sidePanel", "storage"]);
   assert.deepEqual(manifest.host_permissions, ["https://api.track.toggl.com/*"]);
   assert.deepEqual(manifest.optional_host_permissions, ["https://*/*"]);
   const html = ["options.html", "popup.html"]

@@ -116,7 +116,7 @@
                     <option value="manual">Ask before syncing</option>
                   </select>
                   <small>
-                    Ask before syncing keeps completed entries pending until you confirm them in the popup.
+                    Ask before syncing keeps completed entries pending until you confirm them in the side panel.
                   </small>
                 </label>
 
@@ -154,7 +154,7 @@
               <p id="pending-worklogs" class="pending-worklogs hidden"></p>
               <small>
                 The Jira user must be signed in and have Browse projects and Work on issues permission.
-                Failed synchronizations remain in a local retry queue available from the extension popup.
+                Failed synchronizations remain in a local retry queue available from the extension side panel.
               </small>
             </div>
           </section>
@@ -167,7 +167,7 @@
           <details id="advanced-settings" class="advanced">
             <summary>
               <span>Advanced settings</span>
-              <small>Workspace, description template, and timer switching</small>
+              <small>Workspace, Jira button, description template, and timer switching</small>
             </summary>
 
             <div class="advanced-content">
@@ -185,6 +185,16 @@
                   <small>Leave blank to use the default workspace returned by Toggl.</small>
                 </label>
 
+                <label class="field">
+                  <span>Floating button position</span>
+                  <select id="floating-button-position" name="floatingButtonPosition">
+                    <option value="top-left">Top left</option>
+                    <option value="top-right">Top right</option>
+                    <option value="bottom-left">Bottom left</option>
+                    <option value="bottom-right" selected>Bottom right</option>
+                  </select>
+                  <small>Choose which Jira page corner contains the timer and copy actions.</small>
+                </label>
               </div>
 
               <label class="field">
@@ -232,12 +242,14 @@
           <aside class="data-disclosure" aria-labelledby="data-use-title">
             <strong id="data-use-title">How your data is used</strong>
             <p>
-              The extension reads your Toggl entries for the current browser-local day to show
-              Worked today, and can automatically choose your most-used active project. For an
-              identified Jira timer, it reads the issue summary, description, logged time, and
-              estimates to show progress locally. Jira title and description are copied only after
-              you click the copy button. If Work Log sync is enabled, the stopped duration, start
-              time, issue key, and configured comment are sent to your Jira site, where the remaining estimate is adjusted automatically. Retry records stay
+              The extension reads Toggl entries for the current browser-local day and week to
+              calculate daily, weekly, and per-appointment totals, and can automatically choose
+              your most-used active project.
+              It stores your floating button position. It reads the Jira issue summary, description, logged time, and
+              estimates for the timer, side-panel progress, and adjacent copy action. Jira content is
+              copied only after you click the copy button. If Work Log sync is enabled, the stopped duration, start time,
+              issue key, and configured comment are sent to your Jira site, where the remaining
+              estimate is adjusted automatically. Bounded Jira associations and retry records stay
               in this Chrome profile. Nothing is sent to the extension developer.
             </p>
           </aside>
@@ -255,16 +267,18 @@
         <h2 id="usage-title">Daily use</h2>
         <div class="steps">
           <div><span>1</span><p>Open an issue or select one from a Jira board or backlog.</p></div>
-          <div><span>2</span><p>Click the floating <strong>Start in Toggl</strong> button.</p></div>
-          <div><span>3</span><p>Click the same button again to stop it and optionally create a Jira Work Log.</p></div>
-          <div><span>4</span><p>Use the popup to see Worked today, Jira progress, copy Jira details, or retry pending Work Logs.</p></div>
+          <div><span>2</span><p>Use the floating timer button or its adjacent <strong>Copy</strong> action in your chosen corner.</p></div>
+          <div><span>3</span><p>Use <strong>Today's appointments</strong> in the side panel to replay earlier work and safely stop the current timer.</p></div>
+          <div><span>4</span><p>Stop from Jira or the side panel and optionally create, confirm, or retry a Jira Work Log.</p></div>
         </div>
       </section>
 
       <section class="card compact note-card" aria-labelledby="privacy-title">
         <h2 id="privacy-title">Focused permissions</h2>
         <p>
-          Chrome asks for access only to the Jira site entered above. The Toggl token stays in this Chrome profile and is used only by the extension service worker.
+          The required side-panel permission hosts these controls beside the current tab. Chrome asks
+          for site access only to the Jira origin entered above. The Toggl token stays in this Chrome
+          profile and is used only by the extension service worker.
         </p>
       </section>
     </main>
