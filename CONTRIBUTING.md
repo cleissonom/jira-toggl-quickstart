@@ -22,7 +22,7 @@ npm run validate
 - Keep permissions as narrow as the feature allows.
 - Never log or expose API tokens.
 - Add or update service-worker tests for behavior and security changes.
-- Add or update UI contract tests for settings, popup, or manifest changes.
+- Add or update UI contract tests for settings, side-panel, or manifest changes.
 - Keep the default template `[{key}] {summary}` unless a breaking change is explicitly justified.
 - Avoid site-specific company names, URLs, issue keys, or credentials in production defaults and documentation examples.
 - Update `README.md` and `CHANGELOG.md` for user-visible changes.
@@ -30,4 +30,3 @@ npm run validate
 ## Community standards
 
 Participation is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Report security vulnerabilities through a private GitHub security advisory rather than a public issue.
-

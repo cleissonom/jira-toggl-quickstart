@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.7.2 — 2026-08-22
+
+- Replaced the full-width bottom Settings button with an accessible settings gear in the side-panel title header.
+- Made Jira appointment names recognized from retained associations or valid issue keys in their descriptions open the exact configured Jira issue in a new tab, with underlined text and blue hover and keyboard-focus feedback; description inference remains navigation-only.
+
+## 0.7.1 — 2026-08-22
+
+- Replaced manual Toggl API-token entry with **Connect Toggl**, which requests exact optional Toggl Accounts and Track access, confirms the existing account session, retrieves the token from the signed-in Track web profile, validates it through the public API, and stores it only in protected local extension storage.
+- Added explicit login-and-retry handling for both web sessions, fail-closed response validation, atomic reconnect behavior, cross-account Work Log protection, token-injection protection for settings messages, and removal of both Toggl grants with extension settings.
+
+## 0.7.0 — 2026-08-22
+
+- Replaced the toolbar popup with a persistent Chrome side panel that opens from the extension action and adapts to the browser-managed width and scrolling surface.
+- Added a live **Today's appointments** list that aggregates named Toggl entries for the local day and replays them from the side panel.
+- Made replay stop any current timer through the existing Jira Work Log flow, preserve known Jira linkage on the new entry, and keep Jira-looking manual entries Toggl-only.
+- Retained a bounded history of completed Jira timer associations so sync-disabled Jira work can be recognized safely when replayed.
+- Moved **Copy Jira title & description** beside the floating Jira timer button, fixed the user-gesture copy flow, and added accessible busy/success animation without adding clipboard permission.
+- Added top-left, top-right, bottom-left, and bottom-right placement options for the Jira timer and copy controls.
+- Raised the minimum supported Chrome version to 114 and added the required `sidePanel` permission.
+- Updated release metadata, automated coverage, privacy and security disclosures, store copy, and maintainer documentation for v0.7.0.
+
 ## 0.6.0 — 2026-08-21
 
 - Added a Monday–Sunday **Worked this week** total beside **Worked today**, using one Toggl request and local live updates for a running timer.

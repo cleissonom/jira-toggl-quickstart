@@ -9,6 +9,18 @@
   const ISSUE_CACHE_TTL_MS = 10 * 60 * 1000;
   const FAILED_CACHE_TTL_MS = 30 * 1000;
   const JIRA_API_VERSIONS = ["3", "2", "latest"];
+  const FLOATING_BUTTON_POSITIONS = [
+    "top-left",
+    "top-right",
+    "bottom-left",
+    "bottom-right"
+  ];
+  const FLOATING_POSITION_ANCHORS = Object.freeze({
+    "top-left": { top: "24px", right: "auto", bottom: "auto", left: "24px" },
+    "top-right": { top: "24px", right: "24px", bottom: "auto", left: "auto" },
+    "bottom-left": { top: "auto", right: "auto", bottom: "24px", left: "24px" },
+    "bottom-right": { top: "auto", right: "24px", bottom: "24px", left: "auto" }
+  });
   const JIRA_ISSUE_FIELDS = [
     "summary",
     "project",
@@ -30,15 +42,27 @@
     busy: false,
     loadingIssue: false,
     issueError: "",
+    copyText: "",
+    copyStatus: "idle",
+    copyError: "",
+    copyBusy: false,
+    copySucceeded: false,
+    copyRefreshSequence: 0,
+    floatingButtonPosition: "bottom-right",
     refreshSequence: 0,
     lastHref: window.location.href
   };
 
   const ui = createUi();
   const scheduleIssueRefresh = debounce(refreshIssueContext, 250);
+  const scheduleClipboardRefresh = debounce(refreshJiraClipboard, 1500);
 
   ui.button.addEventListener("click", () => {
     void handleButtonClick();
+  });
+
+  ui.copyButton.addEventListener("click", () => {
+    void handleCopyButtonClick();
   });
 
   const observer = new MutationObserver(() => {
@@ -58,16 +82,24 @@
   }, 500);
 
   window.addEventListener("focus", () => {
+    void refreshUiSettings();
     void refreshTimerStatus();
+    if (state.copyStatus === "error") {
+      void refreshJiraClipboard();
+    }
   });
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
+      void refreshUiSettings();
       scheduleIssueRefresh();
       void refreshTimerStatus();
     }
   });
 
+  document.addEventListener("input", scheduleClipboardRefresh, true);
+
+  void refreshUiSettings();
   void refreshIssueContext();
 
   function createUi() {
@@ -75,6 +107,7 @@
 
     const host = document.createElement("div");
     host.id = ROOT_ID;
+    host.dataset.position = "bottom-right";
     Object.assign(host.style, {
       position: "fixed",
       right: "24px",
@@ -97,6 +130,17 @@
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
           pointer-events: none;
         }
+        :host([data-position^="top-"]) .wrapper { flex-direction: column-reverse; }
+        :host([data-position$="left"]) .wrapper { align-items: flex-start; }
+        :host([data-position$="right"]) .wrapper { align-items: flex-end; }
+        .controls {
+          display: flex;
+          max-width: calc(100vw - 48px);
+          align-items: stretch;
+          gap: 8px;
+          pointer-events: none;
+        }
+        :host([data-position$="right"]) .controls { flex-direction: row-reverse; }
         .message {
           max-width: 360px;
           padding: 9px 12px;
@@ -109,7 +153,7 @@
           opacity: 0;
           transform: translateY(4px);
           transition: opacity 120ms ease, transform 120ms ease;
-          pointer-events: auto;
+          pointer-events: none;
         }
         .message.visible {
           opacity: 1;
@@ -117,35 +161,59 @@
         }
         .message.error { background: #ae2a19; }
         .message.success { background: #216e4e; }
-        button {
+        .controls button {
           display: inline-flex;
           align-items: center;
-          gap: 10px;
           min-height: 48px;
-          max-width: 420px;
-          padding: 9px 16px;
-          border: 0;
           border-radius: 999px;
-          background: #0c66e4;
-          color: #fff;
           box-shadow: 0 8px 24px rgba(9, 30, 66, 0.28);
           cursor: pointer;
           font: inherit;
-          text-align: left;
           transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
           pointer-events: auto;
         }
-        button:hover:not(:disabled) {
+        .controls button:hover:not(:disabled) {
           transform: translateY(-1px);
           box-shadow: 0 10px 28px rgba(9, 30, 66, 0.34);
         }
-        button:focus-visible {
-          outline: 3px solid rgba(255, 255, 255, 0.95);
+        .controls button:focus-visible {
+          outline: 3px solid #172b4d;
           outline-offset: 3px;
         }
-        button.running { background: #c9372c; }
-        button.config { background: #44546f; }
-        button:disabled {
+        .timer-button {
+          gap: 10px;
+          max-width: 420px;
+          min-width: 0;
+          padding: 9px 16px;
+          border: 0;
+          background: #0c66e4;
+          color: #fff;
+          text-align: left;
+        }
+        .timer-button.running { background: #c9372c; }
+        .timer-button.config { background: #44546f; }
+        .copy-button {
+          flex: 0 0 auto;
+          gap: 7px;
+          padding: 9px 14px;
+          border: 1px solid #b7b9c0;
+          background: #fff;
+          color: #172b4d;
+          font-weight: 750;
+        }
+        .copy-button:hover:not(:disabled) { background: #f1f2f4; }
+        .copy-button.copying .copy-icon {
+          animation: copy-pulse 650ms ease-in-out infinite alternate;
+        }
+        .copy-button.copied {
+          border-color: #7ee2b8;
+          background: #dcfff1;
+          color: #216e4e;
+        }
+        .copy-button.copied .copy-icon {
+          animation: copy-success 480ms cubic-bezier(0.2, 0.9, 0.3, 1.3);
+        }
+        .controls button:disabled {
           cursor: not-allowed;
           opacity: 0.72;
           transform: none;
@@ -191,16 +259,40 @@
           animation: spin 700ms linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes copy-pulse {
+          from { transform: scale(0.9); opacity: 0.65; }
+          to { transform: scale(1.12); opacity: 1; }
+        }
+        @keyframes copy-success {
+          0% { transform: scale(0.75) rotate(-12deg); }
+          65% { transform: scale(1.28) rotate(4deg); }
+          100% { transform: scale(1) rotate(0); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .controls button { transition: none; }
+          .copy-button.copying .copy-icon,
+          .copy-button.copied .copy-icon,
+          .spinner { animation: none; }
+        }
       </style>
       <div class="wrapper">
         <div id="message" class="message" role="status" aria-live="polite"></div>
-        <button id="toggle" type="button">
-          <span id="icon" class="icon">▶</span>
-          <span class="copy">
-            <span id="label" class="label">Start in Toggl</span>
-            <span id="issue" class="issue"></span>
-          </span>
-        </button>
+        <div class="controls">
+          <button id="toggle" class="timer-button" type="button">
+            <span id="icon" class="icon" aria-hidden="true">▶</span>
+            <span class="copy">
+              <span id="label" class="label">Start in Toggl</span>
+              <span id="issue" class="issue"></span>
+            </span>
+          </button>
+          <button
+            id="copy-jira"
+            class="copy-button"
+            type="button"
+            aria-label="Copy Jira title & description"
+            title="Copy Jira title & description"
+          ><span id="copy-icon" class="copy-icon" aria-hidden="true">⧉</span><span id="copy-label">Copy</span></button>
+        </div>
       </div>
     `;
 
@@ -209,12 +301,44 @@
     return {
       host,
       button: shadow.getElementById("toggle"),
+      copyButton: shadow.getElementById("copy-jira"),
+      copyIcon: shadow.getElementById("copy-icon"),
+      copyLabel: shadow.getElementById("copy-label"),
       icon: shadow.getElementById("icon"),
       label: shadow.getElementById("label"),
       issue: shadow.getElementById("issue"),
       message: shadow.getElementById("message"),
-      messageTimer: null
+      messageTimer: null,
+      copySuccessTimer: null
     };
+  }
+
+  async function refreshUiSettings() {
+    const response = await sendMessage({ type: "GET_JIRA_UI_SETTINGS" });
+    if (!response.ok) {
+      return;
+    }
+    applyFloatingButtonPosition(response.data?.floatingButtonPosition);
+  }
+
+  function applyFloatingButtonPosition(value) {
+    const position = FLOATING_BUTTON_POSITIONS.includes(value)
+      ? value
+      : "bottom-right";
+    state.floatingButtonPosition = position;
+    ui.host.dataset.position = position;
+    Object.assign(ui.host.style, FLOATING_POSITION_ANCHORS[position]);
+  }
+
+  function resetCopyState(status = "idle") {
+    window.clearTimeout(ui.copySuccessTimer);
+    state.copyRefreshSequence += 1;
+    state.copyText = "";
+    state.copyStatus = status;
+    state.copyError = "";
+    state.copyBusy = false;
+    state.copySucceeded = false;
+    return state.copyRefreshSequence;
   }
 
   async function refreshIssueContext() {
@@ -226,6 +350,7 @@
       state.issueSignature = "";
       state.timerStatus = null;
       state.issueError = "";
+      resetCopyState();
       state.loadingIssue = false;
       render();
       return;
@@ -235,6 +360,7 @@
       state.issue = createIssueShell(key);
       state.timerStatus = null;
       state.issueError = "";
+      resetCopyState("loading");
       state.loadingIssue = true;
       render();
     }
@@ -276,7 +402,7 @@
     state.issueSignature = signature;
     state.issueError = "";
     render();
-    await refreshTimerStatus();
+    await Promise.all([refreshTimerStatus(), refreshJiraClipboard()]);
   }
 
   function createIssueShell(key) {
@@ -326,6 +452,105 @@
     render();
   }
 
+  async function refreshJiraClipboard() {
+    const issueKey = state.issue?.key;
+    const issueSignature = state.issueSignature;
+    if (!issueKey) {
+      return;
+    }
+
+    const refreshSequence = resetCopyState("loading");
+    render();
+    const response = await sendMessage({
+      type: "GET_JIRA_CLIPBOARD",
+      issueKey
+    });
+    if (
+      refreshSequence !== state.copyRefreshSequence ||
+      issueKey !== state.issue?.key ||
+      issueSignature !== state.issueSignature
+    ) {
+      return;
+    }
+    applyClipboardResponse(response);
+    render();
+  }
+
+  function applyClipboardResponse(response) {
+    const clipboardText = response.ok
+      ? String(response.data?.clipboardText || "")
+      : "";
+    state.copyText = clipboardText;
+    state.copyStatus = clipboardText ? "ready" : "error";
+    state.copyError = clipboardText
+      ? ""
+      : response.error?.message || "Jira title and description could not be loaded.";
+  }
+
+  async function handleCopyButtonClick() {
+    if (state.copyBusy) {
+      return;
+    }
+    if (state.copyStatus === "error") {
+      await retryJiraClipboard();
+      return;
+    }
+    if (state.copyStatus !== "ready" || !state.copyText) {
+      showMessage("Jira title and description are not ready to copy.", "error");
+      return;
+    }
+
+    let copyOperation;
+    try {
+      copyOperation = navigator.clipboard.writeText(state.copyText);
+    } catch {
+      showCopyFailure();
+      return;
+    }
+
+    state.copyBusy = true;
+    state.copySucceeded = false;
+    renderCopyButton();
+    try {
+      await copyOperation;
+      showCopySuccess();
+      showMessage("Copied Jira title & description.", "success");
+    } catch {
+      showCopyFailure();
+    } finally {
+      state.copyBusy = false;
+      renderCopyButton();
+    }
+  }
+
+  async function retryJiraClipboard() {
+    showMessage("Refreshing Jira title & description…");
+    await refreshJiraClipboard();
+    if (state.copyStatus === "ready") {
+      showMessage("Jira details are ready. Click Copy again.", "success");
+      return;
+    }
+    showMessage(state.copyError, "error");
+  }
+
+  function showCopyFailure() {
+    state.copySucceeded = false;
+    showMessage(
+      "Could not copy Jira details. Check clipboard access and try again.",
+      "error"
+    );
+  }
+
+  function showCopySuccess() {
+    window.clearTimeout(ui.copySuccessTimer);
+    state.copySucceeded = true;
+    renderCopyButton();
+    ui.copySuccessTimer = window.setTimeout(() => {
+      state.copySucceeded = false;
+      renderCopyButton();
+    }, 1400);
+  }
+
   async function handleButtonClick() {
     if (state.loadingIssue || !state.issue?.key) {
       return;
@@ -372,7 +597,7 @@
         );
       } else if (response.data.stoppedPrevious && previousSync?.status === "queued") {
         showMessage(
-          "The previous timer stopped and its Jira Work Log is pending in the extension popup."
+          "The previous timer stopped and its Jira Work Log is pending in the extension side panel."
         );
       } else {
         showMessage(
@@ -389,7 +614,7 @@
       if (worklogSync?.status === "synced") {
         showMessage(`Timer stopped and a Jira Work Log was created for ${worklogSync.issueKey}.`, "success");
       } else if (worklogSync?.status === "queued") {
-        showMessage("Timer stopped. The Jira Work Log is pending in the extension popup.");
+        showMessage("Timer stopped. The Jira Work Log is pending in the extension side panel.");
       } else {
         showMessage("Timer stopped in Toggl.", "success");
       }
@@ -403,6 +628,7 @@
   function render() {
     const hasIssue = Boolean(state.issue?.key);
     ui.host.style.display = hasIssue ? "block" : "none";
+    renderCopyButton();
 
     if (!hasIssue) {
       return;
@@ -457,6 +683,29 @@
     ui.icon.textContent = "▶";
     ui.label.textContent = "Start in Toggl";
     ui.button.title = state.timerStatus?.description || `Start ${state.issue.key} in Toggl`;
+  }
+
+  function renderCopyButton() {
+    ui.copyButton.classList.remove("copying", "copied");
+    if (state.copyBusy) ui.copyButton.classList.add("copying");
+    if (state.copySucceeded) ui.copyButton.classList.add("copied");
+    ui.copyIcon.textContent = state.copySucceeded ? "✓" : "⧉";
+    ui.copyLabel.textContent = state.copyStatus === "error" ? "Retry" : "Copy";
+    ui.copyButton.disabled = state.copyBusy || !["ready", "error"].includes(state.copyStatus);
+    ui.copyButton.ariaLabel = state.copyStatus === "error"
+      ? "Retry preparing Jira title & description"
+      : "Copy Jira title & description";
+    if (state.copyBusy) {
+      ui.copyButton.title = "Copying Jira title & description";
+      return;
+    }
+    ui.copyButton.title = state.copySucceeded
+      ? "Jira title & description copied"
+      : state.copyStatus === "error"
+        ? state.copyError
+      : state.copyStatus === "ready"
+        ? "Copy Jira title & description"
+        : "Preparing Jira title & description";
   }
 
   function extractIssueKey() {

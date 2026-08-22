@@ -1,8 +1,8 @@
 {
   "name": "jira-toggl-quickstart",
-  "version": "0.6.0",
+  "version": "0.7.2",
   "private": true,
-  "description": "Chrome extension for Jira and manual Toggl timers, daily and weekly totals, Jira insights, and optional Work Log sync.",
+  "description": "Chrome extension for Jira and Toggl timers, today's replayable entries, flexible Jira controls, and optional Work Log sync.",
   "scripts": {
     "check": "node --check background.js && node --check content.js && node --check options.js && node --check popup.js && node -e \"JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))\"",
     "test": "node --test tests/*.test.cjs",

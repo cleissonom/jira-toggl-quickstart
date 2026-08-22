@@ -1,6 +1,9 @@
 "use strict";
 
 const DEFAULT_TEMPLATE = "[{key}] {summary}";
+const TOGGL_ACCOUNTS_MATCH = "https://accounts.toggl.com/*";
+const TOGGL_TRACK_WEB_MATCH = "https://track.toggl.com/*";
+const TOGGL_CONNECTION_MATCHES = [TOGGL_ACCOUNTS_MATCH, TOGGL_TRACK_WEB_MATCH];
 const TEMPLATE_PREVIEW_VALUES = Object.freeze({
   key: "PROJ-123",
   summary: "Example Jira issue",
@@ -20,9 +23,9 @@ const TEMPLATE_PREVIEW_VALUES = Object.freeze({
 
 const form = document.getElementById("settings-form");
 const jiraOriginInput = document.getElementById("jira-origin");
-const apiTokenInput = document.getElementById("api-token");
 const workspaceIdInput = document.getElementById("workspace-id");
 const projectIdInput = document.getElementById("project-id");
+const floatingButtonPositionInput = document.getElementById("floating-button-position");
 const templateInput = document.getElementById("description-template");
 const billableInput = document.getElementById("billable");
 const stopExistingInput = document.getElementById("stop-existing");
@@ -40,10 +43,13 @@ const saveButton = document.getElementById("save-button");
 const clearButton = document.getElementById("clear-button");
 const statusElement = document.getElementById("status");
 const connectionBadge = document.getElementById("connection-badge");
+const connectTogglButton = document.getElementById("connect-toggl");
+const togglAccountState = document.getElementById("toggl-account-state");
 const variableButtons = [...document.querySelectorAll("[data-variable]")];
 const worklogVariableButtons = [...document.querySelectorAll("[data-worklog-variable]")];
 
 let currentJiraOrigin = "";
+let hasConnectedToggl = false;
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -52,6 +58,10 @@ form.addEventListener("submit", (event) => {
 
 clearButton.addEventListener("click", () => {
   void clearSettings();
+});
+
+connectTogglButton.addEventListener("click", () => {
+  void connectToggl();
 });
 
 billableInput.addEventListener("change", updatePreview);
@@ -88,6 +98,7 @@ function applySettings(settings) {
   jiraOriginInput.value = currentJiraOrigin;
   workspaceIdInput.value = settings.workspaceId || "";
   projectIdInput.value = settings.projectId || "";
+  floatingButtonPositionInput.value = settings.floatingButtonPosition || "bottom-right";
   templateInput.value = settings.descriptionTemplate || DEFAULT_TEMPLATE;
   billableInput.checked = settings.billable === true;
   stopExistingInput.checked = settings.stopExisting !== false;
@@ -96,25 +107,28 @@ function applySettings(settings) {
   worklogRoundingInput.value = settings.worklogRounding || "nearest-minute";
   worklogCommentTemplateInput.value = settings.worklogCommentTemplate ??
     "Synced from Toggl: {description}";
-  apiTokenInput.required = !settings.hasApiToken;
-
-  if (settings.hasApiToken) {
-    apiTokenInput.placeholder = "Token already saved; leave blank to keep it";
-  } else {
-    apiTokenInput.placeholder = "Paste your Toggl API token";
-  }
+  applyTogglConnectionState(settings);
 
   advancedSettings.open = Boolean(
     settings.descriptionTemplate !== DEFAULT_TEMPLATE ||
-    settings.stopExisting === false
+    settings.stopExisting === false ||
+    settings.floatingButtonPosition !== "bottom-right"
   );
 
-  const pendingCount = Number(settings.pendingWorklogCount || 0);
-  pendingWorklogs.textContent = pendingCount === 1
-    ? "1 Jira Work Log is waiting in the popup retry queue."
-    : `${pendingCount} Jira Work Logs are waiting in the popup retry queue.`;
-  pendingWorklogs.classList.toggle("hidden", pendingCount === 0);
+  renderPendingWorklogs(settings.pendingWorklogCount);
+  renderConnectionBadge(settings);
+  updatePreview();
+}
 
+function renderPendingWorklogs(value) {
+  const pendingCount = Number(value || 0);
+  pendingWorklogs.textContent = pendingCount === 1
+    ? "1 Jira Work Log is waiting in the side-panel retry queue."
+    : `${pendingCount} Jira Work Logs are waiting in the side-panel retry queue.`;
+  pendingWorklogs.classList.toggle("hidden", pendingCount === 0);
+}
+
+function renderConnectionBadge(settings) {
   connectionBadge.classList.remove("connected");
 
   if (settings.configured) {
@@ -128,11 +142,77 @@ function applySettings(settings) {
   } else {
     connectionBadge.textContent = "Not configured";
   }
+}
 
-  updatePreview();
+function applyTogglConnectionState(settings) {
+  hasConnectedToggl = settings.hasApiToken === true;
+  togglAccountState.textContent = hasConnectedToggl
+    ? `Connected${settings.profileName ? ` as ${settings.profileName}` : ""}`
+    : "Not connected";
+  togglAccountState.classList.toggle("connected", hasConnectedToggl);
+  connectTogglButton.textContent = hasConnectedToggl ? "Reconnect Toggl" : "Connect Toggl";
+}
+
+async function connectToggl() {
+  setConnectBusy(true);
+  showStatus("Requesting access to Toggl…");
+  const permissionGranted = await requestTogglConnectionPermissions();
+  if (!permissionGranted) {
+    return;
+  }
+
+  showStatus("Checking your signed-in Toggl account…");
+  const response = await sendMessage({ type: "CONNECT_TOGGL" });
+  setConnectBusy(false);
+  renderTogglConnectionResult(response);
+}
+
+async function requestTogglConnectionPermissions() {
+  try {
+    const granted = await chrome.permissions.request({
+      origins: TOGGL_CONNECTION_MATCHES
+    });
+    if (!granted) {
+      setConnectBusy(false);
+      showStatus("Toggl access was not granted. No account data was read.", "error");
+    }
+    return granted;
+  } catch {
+    setConnectBusy(false);
+    showStatus("Chrome could not request access to Toggl Accounts and Track.", "error");
+    return false;
+  }
+}
+
+function renderTogglConnectionResult(response) {
+  if (!response.ok) {
+    if (["TOGGL_LOGIN_REQUIRED", "TOGGL_TRACK_SESSION_REQUIRED"]
+      .includes(response.error?.code)) {
+      connectTogglButton.textContent = "Retry connection";
+    }
+    showStatus(response.error?.message || "Could not connect Toggl.", "error");
+    return;
+  }
+
+  applyTogglConnectionState(response.data);
+  workspaceIdInput.value = response.data.workspaceId || "";
+  projectIdInput.value = response.data.projectId || "";
+  renderPendingWorklogs(response.data.pendingWorklogCount);
+  renderConnectionBadge(response.data);
+  const account = response.data.profileName ? ` as ${response.data.profileName}` : "";
+  const nextStep = response.data.configured
+    ? "Your saved settings remain ready."
+    : "Save your Jira settings to finish setup.";
+  showStatus(`Toggl connected${account}. ${nextStep}`, "success");
 }
 
 async function saveSettings() {
+  if (!hasConnectedToggl) {
+    showStatus("Connect Toggl before saving settings.", "error");
+    connectTogglButton.focus();
+    return;
+  }
+
   let jiraOrigin;
 
   try {
@@ -174,7 +254,6 @@ async function saveSettings() {
     type: "VALIDATE_AND_SAVE_SETTINGS",
     settings: {
       jiraOrigin,
-      apiToken: apiTokenInput.value,
       workspaceId: workspaceIdInput.value,
       projectId: projectIdInput.value,
       billable: billableInput.checked,
@@ -183,7 +262,8 @@ async function saveSettings() {
       syncWorklogs: syncWorklogsInput.checked,
       worklogSyncMode: worklogSyncModeInput.value,
       worklogRounding: worklogRoundingInput.value,
-      worklogCommentTemplate: worklogCommentTemplateInput.value
+      worklogCommentTemplate: worklogCommentTemplateInput.value,
+      floatingButtonPosition: floatingButtonPositionInput.value
     }
   });
 
@@ -200,7 +280,6 @@ async function saveSettings() {
     return;
   }
 
-  apiTokenInput.value = "";
   applySettings(response.data);
 
   const account = response.data.profileName ? ` Account: ${response.data.profileName}.` : "";
@@ -221,7 +300,7 @@ async function saveSettings() {
 
 async function clearSettings() {
   const confirmed = window.confirm(
-    "Remove the saved token, preferences, and Jira site permission from this Chrome profile?"
+    "Remove the Toggl connection, preferences, pending Work Logs, and site permissions from this Chrome profile?"
   );
 
   if (!confirmed) {
@@ -246,14 +325,19 @@ async function clearSettings() {
   worklogSyncModeInput.value = "automatic";
   worklogRoundingInput.value = "nearest-minute";
   worklogCommentTemplateInput.value = "Synced from Toggl: {description}";
+  floatingButtonPositionInput.value = "bottom-right";
   pendingWorklogs.classList.add("hidden");
   advancedSettings.open = false;
-  apiTokenInput.required = true;
-  apiTokenInput.placeholder = "Paste your Toggl API token";
+  applyTogglConnectionState({ hasApiToken: false });
   connectionBadge.textContent = "Not configured";
   connectionBadge.classList.remove("connected");
   updatePreview();
-  showStatus("Settings and Jira site access were removed from this Chrome profile.", "success");
+  const cleanupWarning = response.data?.permissionCleanupWarning;
+  showStatus(
+    cleanupWarning ||
+      "Settings, the Toggl connection, and site access were removed from this Chrome profile.",
+    cleanupWarning ? "error" : "success"
+  );
 }
 
 function updatePreview() {
@@ -327,7 +411,17 @@ function toJiraMatchPattern(jiraOrigin) {
 function setBusy(busy) {
   saveButton.disabled = busy;
   clearButton.disabled = busy;
-  saveButton.textContent = busy ? "Saving…" : "Connect and save";
+  connectTogglButton.disabled = busy;
+  saveButton.textContent = busy ? "Saving…" : "Save settings";
+}
+
+function setConnectBusy(busy) {
+  connectTogglButton.disabled = busy;
+  saveButton.disabled = busy;
+  clearButton.disabled = busy;
+  connectTogglButton.textContent = busy
+    ? "Connecting…"
+    : hasConnectedToggl ? "Reconnect Toggl" : "Connect Toggl";
 }
 
 function showStatus(message, type = "") {

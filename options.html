@@ -24,7 +24,7 @@
         <div class="section-heading">
           <div>
             <h2 id="setup-title">Quick setup</h2>
-            <p>Paste your Jira URL and Toggl token, optionally choose a Toggl project, then save.</p>
+            <p>Connect your signed-in Toggl account, add your Jira URL, then save.</p>
           </div>
           <span id="connection-badge" class="badge">Not configured</span>
         </div>
@@ -47,25 +47,24 @@
               <small>Paste the site, board, backlog, or issue URL. Only its HTTPS origin is saved.</small>
             </label>
 
-            <label class="field">
-              <span>Toggl Track API token</span>
-              <input
-                id="api-token"
-                name="apiToken"
-                type="password"
-                autocomplete="off"
-                spellcheck="false"
-                placeholder="Paste your Toggl API token"
-              />
-              <small>
-                Need a token?
-                <a
-                  href="https://track.toggl.com/profile#api-token"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >Open the Toggl API Token page ↗</a>
+            <div class="field toggl-account-field">
+              <span>Toggl Track account</span>
+              <div class="toggl-account-control">
+                <span id="toggl-account-state">Not connected</span>
+                <button
+                  id="connect-toggl"
+                  class="secondary"
+                  type="button"
+                  aria-describedby="toggl-account-state toggl-connect-help"
+                >Connect Toggl</button>
+              </div>
+              <small id="toggl-connect-help">
+                Uses your current Toggl Accounts and Track sign-ins to confirm the session, retrieve
+                and validate an API token, then saves it in protected storage in this Chrome profile.
+                The extension never reads your password or account cookies. This connection
+                depends on Toggl's web-app session endpoints.
               </small>
-            </label>
+            </div>
 
             <label class="field project-field">
               <span>Toggl project ID <em>(optional)</em></span>
@@ -116,7 +115,7 @@
                     <option value="manual">Ask before syncing</option>
                   </select>
                   <small>
-                    Ask before syncing keeps completed entries pending until you confirm them in the popup.
+                    Ask before syncing keeps completed entries pending until you confirm them in the side panel.
                   </small>
                 </label>
 
@@ -154,7 +153,7 @@
               <p id="pending-worklogs" class="pending-worklogs hidden"></p>
               <small>
                 The Jira user must be signed in and have Browse projects and Work on issues permission.
-                Failed synchronizations remain in a local retry queue available from the extension popup.
+                Failed synchronizations remain in a local retry queue available from the extension side panel.
               </small>
             </div>
           </section>
@@ -167,7 +166,7 @@
           <details id="advanced-settings" class="advanced">
             <summary>
               <span>Advanced settings</span>
-              <small>Workspace, description template, and timer switching</small>
+              <small>Workspace, Jira button, description template, and timer switching</small>
             </summary>
 
             <div class="advanced-content">
@@ -185,6 +184,16 @@
                   <small>Leave blank to use the default workspace returned by Toggl.</small>
                 </label>
 
+                <label class="field">
+                  <span>Floating button position</span>
+                  <select id="floating-button-position" name="floatingButtonPosition">
+                    <option value="top-left">Top left</option>
+                    <option value="top-right">Top right</option>
+                    <option value="bottom-left">Bottom left</option>
+                    <option value="bottom-right" selected>Bottom right</option>
+                  </select>
+                  <small>Choose which Jira page corner contains the timer and copy actions.</small>
+                </label>
               </div>
 
               <label class="field">
@@ -232,12 +241,17 @@
           <aside class="data-disclosure" aria-labelledby="data-use-title">
             <strong id="data-use-title">How your data is used</strong>
             <p>
-              The extension reads your Toggl entries for the current browser-local day to show
-              Worked today, and can automatically choose your most-used active project. For an
-              identified Jira timer, it reads the issue summary, description, logged time, and
-              estimates to show progress locally. Jira title and description are copied only after
-              you click the copy button. If Work Log sync is enabled, the stopped duration, start
-              time, issue key, and configured comment are sent to your Jira site, where the remaining estimate is adjusted automatically. Retry records stay
+              The extension reads Toggl entries for the current browser-local day and week to
+              calculate daily, weekly, and per-appointment totals, and can automatically choose
+              your most-used active project. When you connect Toggl, it checks your existing
+              Toggl Accounts session, loads your signed-in Track web profile, validates its API
+              token, and saves only the token and account details needed by the extension. It never
+              reads your Toggl password or stores the account cookies.
+              It stores your floating button position. It reads the Jira issue summary, description, logged time, and
+              estimates for the timer, side-panel progress, and adjacent copy action. Jira content is
+              copied only after you click the copy button. If Work Log sync is enabled, the stopped duration, start time,
+              issue key, and configured comment are sent to your Jira site, where the remaining
+              estimate is adjusted automatically. Bounded Jira associations and retry records stay
               in this Chrome profile. Nothing is sent to the extension developer.
             </p>
           </aside>
@@ -245,7 +259,7 @@
           <div id="status" class="status" role="status" aria-live="polite"></div>
 
           <div class="actions">
-            <button id="save-button" class="primary" type="submit">Connect and save</button>
+            <button id="save-button" class="primary" type="submit">Save settings</button>
             <button id="clear-button" class="secondary" type="button">Remove settings</button>
           </div>
         </form>
@@ -255,16 +269,19 @@
         <h2 id="usage-title">Daily use</h2>
         <div class="steps">
           <div><span>1</span><p>Open an issue or select one from a Jira board or backlog.</p></div>
-          <div><span>2</span><p>Click the floating <strong>Start in Toggl</strong> button.</p></div>
-          <div><span>3</span><p>Click the same button again to stop it and optionally create a Jira Work Log.</p></div>
-          <div><span>4</span><p>Use the popup to see Worked today, Jira progress, copy Jira details, or retry pending Work Logs.</p></div>
+          <div><span>2</span><p>Use the floating timer button or its adjacent <strong>Copy</strong> action in your chosen corner.</p></div>
+          <div><span>3</span><p>Use <strong>Today's appointments</strong> in the side panel to replay earlier work and safely stop the current timer.</p></div>
+          <div><span>4</span><p>Stop from Jira or the side panel and optionally create, confirm, or retry a Jira Work Log.</p></div>
         </div>
       </section>
 
       <section class="card compact note-card" aria-labelledby="privacy-title">
         <h2 id="privacy-title">Focused permissions</h2>
         <p>
-          Chrome asks for access only to the Jira site entered above. The Toggl token stays in this Chrome profile and is used only by the extension service worker.
+          The required side-panel permission hosts these controls beside the current tab. Chrome asks
+          for site access only to the Jira origin entered above and to Toggl Accounts and Track when
+          you click Connect Toggl. The Toggl token stays in this Chrome profile and is available only
+          to trusted extension pages and the service worker.
         </p>
       </section>
     </main>

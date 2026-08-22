@@ -42,14 +42,16 @@ class FakeClassList {
 }
 
 class FakeElement {
-  constructor(id = "") {
+  constructor(id = "", tagName = "div") {
     this.id = id;
+    this.tagName = String(tagName).toUpperCase();
     this.textContent = "";
     this.className = "";
     this.disabled = false;
     this.value = "";
     this.dataset = {};
     this.children = [];
+    this.attributes = new Map();
     this.classList = new FakeClassList(this);
     this.listeners = new Map();
   }
@@ -71,11 +73,25 @@ class FakeElement {
     this.children = [...children];
   }
 
+  setAttribute(name, value) {
+    this.attributes.set(name, String(value));
+  }
+
+  getAttribute(name) {
+    return this.attributes.get(name) ?? null;
+  }
+
   focus() {}
 }
 
-function createPopupHarness({ clipboardWrite } = {}) {
+function createPopupHarness({
+  runtimeSendMessage,
+  openOptionsPage = () => Promise.resolve()
+} = {}) {
   const elements = new Map();
+  const documentListeners = new Map();
+  const runtimeListeners = new Map();
+  const windowListeners = new Map();
   const getElement = (id) => {
     if (!elements.has(id)) elements.set(id, new FakeElement(id));
     return elements.get(id);
@@ -87,31 +103,64 @@ function createPopupHarness({ clipboardWrite } = {}) {
     Math,
     Number,
     String,
+    URL,
     Promise,
     document: {
       getElementById: getElement,
-      createElement: () => new FakeElement()
+      createElement: (tagName) => new FakeElement("", tagName),
+      visibilityState: "visible",
+      addEventListener(type, listener) {
+        documentListeners.set(type, listener);
+      }
     },
     window: {
       setTimeout: () => 0,
       setInterval: () => 0,
-      clearInterval: () => undefined
-    },
-    navigator: {
-      clipboard: {
-        writeText: clipboardWrite || (() => Promise.resolve())
+      clearInterval: () => undefined,
+      addEventListener(type, listener) {
+        windowListeners.set(type, listener);
       }
     },
     chrome: {
       runtime: {
-        openOptionsPage: () => Promise.resolve(),
-        sendMessage: () => new Promise(() => undefined)
+        openOptionsPage,
+        sendMessage: runtimeSendMessage || (() => new Promise(() => undefined)),
+        onMessage: {
+          addListener(listener) {
+            runtimeListeners.set("message", listener);
+          }
+        }
       }
     }
   });
 
   vm.runInContext(SOURCE, context, { filename: "popup.js" });
-  return { context, elements, getElement };
+  return {
+    context,
+    documentListeners,
+    elements,
+    getElement,
+    runtimeListeners,
+    windowListeners
+  };
+}
+
+function findByClass(element, className) {
+  if (
+    element.classList?.contains(className) ||
+    String(element.className || "").split(/\s+/).includes(className)
+  ) return element;
+  for (const child of element.children || []) {
+    const match = findByClass(child, className);
+    if (match) return match;
+  }
+  return null;
+}
+
+async function flushTasks() {
+  for (let index = 0; index < 3; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 test("formats compact Worked today durations", () => {
@@ -120,6 +169,13 @@ test("formats compact Worked today durations", () => {
   assert.equal(context.formatWorkedDuration((2 * 60 + 5) * 60), "2h 05m");
   assert.equal(context.formatWorkedDuration((12 * 60 + 30) * 60), "12h 30m");
   assert.equal(context.formatWorkedDuration(0), "0m");
+});
+
+test("persistent refreshes do not steal focus into the manual timer form", () => {
+  assert.doesNotMatch(
+    SOURCE,
+    /window\.setTimeout\(\(\) => manualDescriptionInput\.focus\(\), 0\)/
+  );
 });
 
 test("increments a running Worked today value locally after the initial request", () => {
@@ -241,45 +297,218 @@ test("derives Jira time left from original minus logged time", () => {
   assert.equal(lines.detail, "3h left");
 });
 
-test("copies Jira Markdown and shows success feedback", async () => {
-  const writes = [];
-  const { context, getElement } = createPopupHarness({
-    clipboardWrite: async (value) => writes.push(value)
+test("renders today's appointments with totals and a disabled running action", () => {
+  const { context, getElement } = createPopupHarness();
+  const calculatedAt = Date.now();
+  context.renderCurrent({
+    id: 106,
+    description: "Customer onboarding",
+    start: "2026-08-20T11:30:00Z",
+    duration: -1
+  }, {
+    togglConfigured: true,
+    jiraOrigin: "https://team.atlassian.net"
   });
-  context.renderJira({
+  context.renderAppointments({
     status: "ok",
-    issueKey: "ECP-3217",
-    loggedSeconds: 60,
-    originalEstimateSeconds: null,
-    remainingEstimateSeconds: null,
-    clipboardText: "Title:\n```text\n[ECP-3217] Example\n```"
+    calculatedAt: new Date(calculatedAt).toISOString(),
+    appointments: [
+      {
+        sourceEntryId: 106,
+        issueKey: "PROJ-123",
+        description: "Customer onboarding",
+        totalSeconds: 7200,
+        runningEntryId: 106
+      },
+      {
+        sourceEntryId: 103,
+        issueKey: null,
+        description: "Review docs",
+        totalSeconds: 1800,
+        runningEntryId: null
+      },
+      {
+        sourceEntryId: 104,
+        issueKey: null,
+        linkIssueKey: "ECP-3217",
+        description: "[ECP-3217] Switch Cleanup prompt to use Claude 4.6",
+        totalSeconds: 900,
+        runningEntryId: null
+      }
+    ]
   });
 
-  await context.copyJiraDetails();
+  const list = getElement("appointments-list");
+  assert.equal(list.children.length, 3);
+  const jiraTitle = findByClass(list.children[0], "appointment-title");
+  assert.equal(jiraTitle.tagName, "A");
+  assert.equal(jiraTitle.textContent, "Customer onboarding");
+  assert.equal(jiraTitle.getAttribute("href"), "https://team.atlassian.net/browse/PROJ-123");
+  assert.equal(jiraTitle.getAttribute("target"), "_blank");
+  assert.equal(jiraTitle.getAttribute("rel"), "noopener noreferrer");
+  assert.equal(
+    jiraTitle.getAttribute("aria-label"),
+    "Customer onboarding — open PROJ-123 in Jira in a new tab"
+  );
+  assert.equal(findByClass(list.children[0], "appointment-duration").textContent, "2h");
+  const runningButton = findByClass(list.children[0], "appointment-play");
+  assert.equal(runningButton.textContent, "Running");
+  assert.equal(runningButton.disabled, true);
+  assert.match(runningButton.getAttribute("aria-label"), /PROJ-123.*running/i);
+  const manualTitle = findByClass(list.children[1], "appointment-title");
+  assert.equal(manualTitle.tagName, "STRONG");
+  assert.equal(manualTitle.getAttribute("href"), null);
+  assert.equal(findByClass(list.children[1], "appointment-duration").textContent, "30m");
+  const inferredTitle = findByClass(list.children[2], "appointment-title");
+  assert.equal(inferredTitle.tagName, "A");
+  assert.equal(
+    inferredTitle.getAttribute("href"),
+    "https://team.atlassian.net/browse/ECP-3217"
+  );
+  assert.equal(findByClass(list.children[2], "appointment-duration").textContent, "15m");
 
-  assert.deepEqual(writes, ["Title:\n```text\n[ECP-3217] Example\n```"]);
-  assert.equal(getElement("copy-status").textContent, "Copied to clipboard");
-  assert.equal(getElement("copy-jira").disabled, false);
+  assert.equal(
+    context.getLiveAppointmentSeconds(
+      { totalSeconds: 7200, runningEntryId: 106 },
+      { calculatedAt: new Date(calculatedAt).toISOString() },
+      calculatedAt + 125_000
+    ),
+    7325
+  );
 });
 
-test("shows an actionable state when the Jira clipboard write fails", async () => {
-  const { context, getElement } = createPopupHarness({
-    clipboardWrite: async () => {
-      throw new Error("denied");
+test("rejects unsafe or incomplete Jira appointment link inputs", () => {
+  const { context } = createPopupHarness();
+
+  assert.equal(
+    context.buildJiraIssueUrl("PROJ-123", "https://team.atlassian.net"),
+    "https://team.atlassian.net/browse/PROJ-123"
+  );
+  assert.equal(context.buildJiraIssueUrl("../admin", "https://team.atlassian.net"), "");
+  assert.equal(context.buildJiraIssueUrl("PROJ-123", "http://team.atlassian.net"), "");
+  assert.equal(context.buildJiraIssueUrl("PROJ-123", ""), "");
+});
+
+test("the settings control opens the extension options page", async () => {
+  let opened = 0;
+  const { getElement } = createPopupHarness({
+    openOptionsPage: async () => {
+      opened += 1;
     }
   });
-  context.renderJira({
+
+  getElement("settings").listeners.get("click")();
+  await flushTasks();
+
+  assert.equal(opened, 1);
+});
+
+test("plays an appointment by source ID and reloads the side panel state", async () => {
+  const messages = [];
+  const state = {
+    settings: { hasApiToken: true, togglConfigured: true, workspaceName: "QA" },
+    current: null,
+    workedToday: { status: "ok", totalSeconds: 0, weekTotalSeconds: 0, appointments: [] },
+    jira: { status: "not-applicable" },
+    worklogs: { pendingCount: 0, pending: [] }
+  };
+  const { context, getElement } = createPopupHarness({
+    runtimeSendMessage: async (message) => {
+      messages.push(message);
+      if (message.type === "START_TODAY_APPOINTMENT") {
+        return { ok: true, data: { action: "started", stoppedPrevious: false } };
+      }
+      return { ok: true, data: state };
+    }
+  });
+  context.renderAppointments({
     status: "ok",
-    issueKey: "ECP-3217",
-    loggedSeconds: 60,
-    originalEstimateSeconds: null,
-    remainingEstimateSeconds: null,
-    clipboardText: "clipboard document"
+    appointments: [{
+      sourceEntryId: 103,
+      issueKey: null,
+      description: "Review docs",
+      totalSeconds: 1800,
+      runningEntryId: null
+    }]
   });
 
-  await context.copyJiraDetails();
+  await context.startTodayAppointment(0);
 
-  assert.match(getElement("copy-status").textContent, /Check clipboard access and try again/);
-  assert.equal(getElement("copy-status").classList.contains("error-state"), true);
-  assert.equal(getElement("copy-jira").disabled, false);
+  assert.ok(messages.some((message) =>
+    message.type === "START_TODAY_APPOINTMENT" && message.sourceEntryId === 103
+  ));
+  assert.ok(messages.filter((message) => message.type === "GET_POPUP_STATE").length >= 1);
+  assert.match(getElement("notice").textContent, /started/i);
+});
+
+test("keeps appointment controls available when replay fails", async () => {
+  const { context, getElement } = createPopupHarness({
+    runtimeSendMessage: async (message) => message.type === "START_TODAY_APPOINTMENT"
+      ? { ok: false, error: { message: "The selected appointment is unavailable." } }
+      : new Promise(() => undefined)
+  });
+  context.renderAppointments({
+    status: "ok",
+    appointments: [{
+      sourceEntryId: 103,
+      issueKey: null,
+      description: "Review docs",
+      totalSeconds: 1800,
+      runningEntryId: null
+    }]
+  });
+
+  await context.startTodayAppointment(0);
+
+  assert.match(getElement("error").textContent, /unavailable/i);
+  assert.equal(findByClass(getElement("appointments-list").children[0], "appointment-play").disabled, false);
+});
+
+test("refreshes persistent side panel state when it regains focus", async () => {
+  let stateRequests = 0;
+  const state = {
+    settings: { hasApiToken: false },
+    current: null,
+    workedToday: { status: "not-configured" },
+    jira: { status: "not-applicable" },
+    worklogs: { pendingCount: 0, pending: [] }
+  };
+  const { windowListeners } = createPopupHarness({
+    runtimeSendMessage: async (message) => {
+      if (message.type === "GET_POPUP_STATE") stateRequests += 1;
+      return { ok: true, data: state };
+    }
+  });
+  await flushTasks();
+  const initialRequests = stateRequests;
+
+  windowListeners.get("focus")();
+  await flushTasks();
+
+  assert.ok(initialRequests >= 1);
+  assert.equal(stateRequests, initialRequests + 1);
+});
+
+test("refreshes persistent side panel state after an external timer mutation", async () => {
+  let stateRequests = 0;
+  const state = {
+    settings: { hasApiToken: false },
+    current: null,
+    workedToday: { status: "not-configured" },
+    jira: { status: "not-applicable" },
+    worklogs: { pendingCount: 0, pending: [] }
+  };
+  const { runtimeListeners } = createPopupHarness({
+    runtimeSendMessage: async () => {
+      stateRequests += 1;
+      return { ok: true, data: state };
+    }
+  });
+  await flushTasks();
+  const initialRequests = stateRequests;
+
+  runtimeListeners.get("message")({ type: "SIDE_PANEL_STATE_CHANGED" });
+  await flushTasks();
+
+  assert.equal(stateRequests, initialRequests + 1);
 });

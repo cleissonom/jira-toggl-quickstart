@@ -11,7 +11,7 @@ body:
     id: version
     attributes:
       label: Extension version
-      placeholder: 0.6.0
+      placeholder: 0.7.2
     validations:
       required: true
   - type: input
@@ -27,7 +27,10 @@ body:
       label: Affected area
       options:
         - Jira button
-        - Popup manual timer
+        - Jira copy action
+        - Side panel or toolbar action
+        - Manual timer
+        - Side panel today's appointments
         - Settings
         - Toggl API integration
         - Permissions
