@@ -312,14 +312,18 @@ test("running icon uses the high-contrast 0.6.0 palette", () => {
   assert.deepEqual(readPixel(image, 84, 68), [26, 244, 252, 255]);
 });
 
-test("release metadata is set to version 0.7.2", () => {
+test("release metadata is set to version 1.0.0", () => {
   const manifest = JSON.parse(read("manifest.json"));
   const packageJson = JSON.parse(read("package.json"));
-  assert.equal(manifest.version, "0.7.2");
-  assert.equal(packageJson.version, "0.7.2");
+  assert.equal(manifest.version, "1.0.0");
+  assert.equal(packageJson.version, "1.0.0");
   assert.match(manifest.description, /today/i);
-  assert.match(read("CHANGELOG.md"), /## 0\.7\.2 — 2026-08-22/);
-  assert.match(read(".github/ISSUE_TEMPLATE/bug_report.yml"), /placeholder: 0\.7\.2/);
+  assert.match(read("CHANGELOG.md"), /## 1\.0\.0 — 2026-08-25/);
+  assert.match(read(".github/ISSUE_TEMPLATE/bug_report.yml"), /placeholder: 1\.0\.0/);
+  assert.match(
+    read("README.md"),
+    /https:\/\/chromewebstore\.google\.com\/detail\/jira-%E2%86%92-toggl-quick-start\/ijkninhienjcgnlfcelljeoimpankboc/
+  );
 });
 
 test("extension stylesheets have balanced blocks and one Work Log settings block", () => {
@@ -529,7 +533,7 @@ test("release documentation covers the v0.7.0 through v0.7.2 panel features", ()
   assert.match(security, /no remote JavaScript, `eval`, `new Function`/);
   assert.match(store, /No clipboard permission is requested/);
   assert.match(store, /side panel/i);
-  assert.match(releasing, /v0\.7\.2/);
+  assert.match(releasing, /v1\.0\.0/);
   assert.match(releasing, /all four floating-button positions/i);
   assert.match(releasing, /changelog.*generated comparison notes/i);
   assert.match(changelog, /## 0\.7\.1.*Connect Toggl/is);

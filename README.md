@@ -11,6 +11,10 @@
 
 A lightweight Manifest V3 Chrome extension that starts, stops, and replays Toggl Track work from Jira issues, shows daily and weekly totals plus Jira work insights, optionally mirrors completed Jira timers into Jira Work Logs, and supports manual Toggl timers.
 
+## Install from the Chrome Web Store
+
+[Install Jira → Toggl Quick Start from the Chrome Web Store](https://chromewebstore.google.com/detail/jira-%E2%86%92-toggl-quick-start/ijkninhienjcgnlfcelljeoimpankboc).
+
 For a Jira issue such as `PROJ-123 — Improve the onboarding workflow`, the default timer description is:
 
 ```text
@@ -298,7 +302,7 @@ Official references:
 
 - [RELEASING.md](RELEASING.md) describes versioning, tags, and automated GitHub releases.
 - [STORE_LISTING.md](STORE_LISTING.md) contains the Chrome Web Store description, permission justifications, and privacy declarations.
-- A tag such as `v0.7.2` triggers the release workflow, which validates the source, creates a minimal Chrome Web Store ZIP plus its SHA-256 checksum, and prepends the matching changelog section to the generated comparison notes.
+- A tag such as `v1.0.0` triggers the release workflow, which validates the source, creates a minimal Chrome Web Store ZIP plus its SHA-256 checksum, and prepends the matching changelog section to the generated comparison notes.
 
 ## Contributing
 

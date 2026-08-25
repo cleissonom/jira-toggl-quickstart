@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.0.0 — 2026-08-25
+
+- Promoted Jira → Toggl Quick Start to its first stable release.
+- Added the published Chrome Web Store installation link to the README.
+
 ## 0.7.2 — 2026-08-22
 
 - Replaced the full-width bottom Settings button with an accessible settings gear in the side-panel title header.
