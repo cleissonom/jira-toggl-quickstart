@@ -20,11 +20,11 @@
 
 ## Create a release
 
-Create and push a tag that exactly matches the manifest version. For version 0.7.2:
+Create and push a tag that exactly matches the manifest version. For version 1.0.0:
 
 ```bash
-git tag -a v0.7.2 -m "Release v0.7.2"
-git push origin v0.7.2
+git tag -a v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
 ```
 
 The `Release extension package` workflow validates the project, creates a minimal Chrome Web Store ZIP, produces its SHA-256 checksum, attaches both files to a GitHub release, and prepends the matching changelog section to the generated comparison notes.
